@@ -312,6 +312,7 @@ func (u *UsbGadget) UpdateGadgetConfig() error {
 	defer u.configLock.Unlock()
 
 	u.loadGadgetConfig()
+	u.CloseHidFiles()
 
 	err := u.configureUsbGadget(true)
 	if err != nil {
