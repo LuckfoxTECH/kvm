@@ -123,6 +123,15 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 	}
 	session := &Session{peerConnection: peerConnection}
 
+	// NewPeerConnection has already started the RTCP interceptor goroutines and
+	// their tickers, so every failure path from here on has to close it.
+	sessionReady := false
+	defer func() {
+		if !sessionReady {
+			_ = peerConnection.Close()
+		}
+	}()
+
 	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
 		scopedLogger.Info().Str("label", d.Label()).Uint16("id", *d.ID()).Msg("New DataChannel")
 		switch d.Label() {
@@ -197,7 +206,7 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 
 	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		scopedLogger.Info().Interface("candidate", candidate).Msg("WebRTC peerConnection has a new ICE candidate")
-		if candidate != nil {
+		if candidate != nil && sessionConfig.ws != nil {
 			err := wsjson.Write(context.Background(), sessionConfig.ws, gin.H{"type": "new-ice-candidate", "data": candidate.ToJSON()})
 			if err != nil {
 				scopedLogger.Warn().Err(err).Msg("failed to write new-ice-candidate to WebRTC signaling channel")
@@ -242,6 +251,8 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 			}
 		}
 	})
+
+	sessionReady = true
 	return session, nil
 }
 

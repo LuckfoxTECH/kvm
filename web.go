@@ -216,6 +216,7 @@ func handleWebRTCSession(c *gin.Context) {
 
 	sd, err := session.ExchangeOffer(req.Sd)
 	if err != nil {
+		_ = session.peerConnection.Close()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err})
 		return
 	}
@@ -1091,6 +1092,7 @@ func handleSessionRequest(
 
 	sd, err := session.ExchangeOffer(req.Sd)
 	if err != nil {
+		_ = session.peerConnection.Close()
 		_ = wsjson.Write(context.Background(), c, gin.H{"error": err})
 		return err
 	}
