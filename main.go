@@ -103,14 +103,14 @@ func Main() {
 	// Set up callbacks for HTTP video stream subscribers
 	// When first HTTP subscriber connects and there's no WebRTC session, start video
 	videoBroadcaster.onFirstSubscribe = func() {
-		if actionSessions == 0 {
+		if getActiveSessions() == 0 {
 			logger.Info().Msg("First HTTP video subscriber connected, starting video stream")
 			_ = writeCtrlAction("start_video")
 		}
 	}
 	// When last HTTP subscriber disconnects and there's no WebRTC session, stop video
 	videoBroadcaster.onLastUnsubscribe = func() {
-		if actionSessions == 0 {
+		if getActiveSessions() == 0 {
 			logger.Info().Msg("Last HTTP video subscriber disconnected, stopping video stream")
 			_ = writeCtrlAction("stop_video")
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"strings"
+	"sync"
 
 	"kvm/internal/logging"
 
@@ -219,10 +220,10 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 		if connectionState == webrtc.ICEConnectionStateConnected {
 			if !isConnected {
 				isConnected = true
-				actionSessions++
+				activeSessions := incrActiveSessions()
 				onActiveSessionsChanged()
 				setNpuAppStatus()
-				if actionSessions == 1 {
+				if activeSessions == 1 {
 					onFirstSessionConnected()
 				}
 			}
@@ -243,9 +244,9 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 			}
 			if isConnected {
 				isConnected = false
-				actionSessions--
+				activeSessions := decrActiveSessions()
 				onActiveSessionsChanged()
-				if actionSessions == 0 {
+				if activeSessions == 0 {
 					onLastSessionDisconnected()
 				}
 			}
@@ -256,7 +257,37 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 	return session, nil
 }
 
-var actionSessions = 0
+var (
+	actionSessions      = 0
+	activeSessionsMutex sync.Mutex
+)
+
+// incrActiveSessions, decrActiveSessions and getActiveSessions guard the
+// active session counter. It is mutated from pion's ICE state-change
+// callbacks, which run on per-PeerConnection goroutines, and read from the
+// HTTP video broadcaster callbacks, so a bare int is a data race.
+func incrActiveSessions() int {
+	activeSessionsMutex.Lock()
+	defer activeSessionsMutex.Unlock()
+
+	actionSessions++
+	return actionSessions
+}
+
+func decrActiveSessions() int {
+	activeSessionsMutex.Lock()
+	defer activeSessionsMutex.Unlock()
+
+	actionSessions--
+	return actionSessions
+}
+
+func getActiveSessions() int {
+	activeSessionsMutex.Lock()
+	defer activeSessionsMutex.Unlock()
+
+	return actionSessions
+}
 
 func onActiveSessionsChanged() {
 	requestDisplayUpdate(true)
