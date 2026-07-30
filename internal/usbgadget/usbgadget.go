@@ -7,6 +7,7 @@ import (
 	"os"
 	"path"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"kvm/internal/logging"
@@ -60,8 +61,10 @@ type UsbGadget struct {
 	keyboardLock    sync.Mutex
 	absMouseHidFile *os.File
 	absMouseLock    sync.Mutex
+	absMouseBacklog atomic.Int32
 	relMouseHidFile *os.File
 	relMouseLock    sync.Mutex
+	relMouseBacklog atomic.Int32
 
 	keyboardState       KeyboardState
 	keyboardStateLock   sync.Mutex

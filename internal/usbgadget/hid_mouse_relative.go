@@ -89,6 +89,11 @@ func (u *UsbGadget) relMouseWriteHidFile(data []byte) error {
 }
 
 func (u *UsbGadget) RelMouseReport(mx, my int8, buttons uint8, wheel int8) error {
+	if !enterHidBacklog(&u.relMouseBacklog) {
+		return errHidReportDropped
+	}
+	defer u.relMouseBacklog.Add(-1)
+
 	u.relMouseLock.Lock()
 	defer u.relMouseLock.Unlock()
 
