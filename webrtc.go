@@ -124,6 +124,9 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 	}
 	session := &Session{peerConnection: peerConnection}
 
+	// Idempotent. One worker process-wide: the gadget is a singleton.
+	startKeyboardRPCWorker()
+
 	// NewPeerConnection has already started the RTCP interceptor goroutines and
 	// their tickers, so every failure path from here on has to close it.
 	sessionReady := false
@@ -139,6 +142,11 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 		case "rpc":
 			session.RPCChannel = d
 			d.OnMessage(func(msg webrtc.DataChannelMessage) {
+				// pion delivers these in order; only the worker keeps it.
+				if isKeyboardReport(msg.Data) {
+					enqueueKeyboardRPC(msg, session)
+					return
+				}
 				go onRPCMessage(msg, session)
 			})
 			triggerOTAStateUpdate()
