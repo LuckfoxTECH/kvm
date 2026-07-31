@@ -77,7 +77,7 @@ func (u *UsbGadget) relMouseWriteHidFile(data []byte) error {
 		}
 	}
 
-	_, err := u.relMouseHidFile.Write(data)
+	_, err := u.writeWithTimeout(u.relMouseHidFile, data)
 	if err != nil {
 		u.logWithSupression("relMouseWriteHidFile", 100, u.log, err, "failed to write to hidg2")
 		u.relMouseHidFile.Close()
@@ -89,6 +89,11 @@ func (u *UsbGadget) relMouseWriteHidFile(data []byte) error {
 }
 
 func (u *UsbGadget) RelMouseReport(mx, my int8, buttons uint8, wheel int8) error {
+	if !enterHidBacklog(&u.relMouseBacklog) {
+		return errHidReportDropped
+	}
+	defer u.relMouseBacklog.Add(-1)
+
 	u.relMouseLock.Lock()
 	defer u.relMouseLock.Unlock()
 

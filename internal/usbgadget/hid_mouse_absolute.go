@@ -86,7 +86,7 @@ func (u *UsbGadget) absMouseWriteHidFile(data []byte) error {
 		}
 	}
 
-	_, err := u.absMouseHidFile.Write(data)
+	_, err := u.writeWithTimeout(u.absMouseHidFile, data)
 	if err != nil {
 		u.logWithSupression("absMouseWriteHidFile", 100, u.log, err, "failed to write to hidg1")
 		u.absMouseHidFile.Close()
@@ -98,6 +98,11 @@ func (u *UsbGadget) absMouseWriteHidFile(data []byte) error {
 }
 
 func (u *UsbGadget) AbsMouseReport(x, y int, buttons uint8) error {
+	if !enterHidBacklog(&u.absMouseBacklog) {
+		return errHidReportDropped
+	}
+	defer u.absMouseBacklog.Add(-1)
+
 	u.absMouseLock.Lock()
 	defer u.absMouseLock.Unlock()
 
@@ -118,6 +123,11 @@ func (u *UsbGadget) AbsMouseReport(x, y int, buttons uint8) error {
 }
 
 func (u *UsbGadget) AbsMouseWheelReport(wheelY int8) error {
+	if !enterHidBacklog(&u.absMouseBacklog) {
+		return errHidReportDropped
+	}
+	defer u.absMouseBacklog.Add(-1)
+
 	u.absMouseLock.Lock()
 	defer u.absMouseLock.Unlock()
 

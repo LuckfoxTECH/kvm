@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -106,12 +107,36 @@ func (u *UsbGadget) logWithSupression(counterName string, every int, logger *zer
 }
 
 func (u *UsbGadget) resetLogSuppressionCounter(counterName string) {
+	u.logLock.Lock()
+	defer u.logLock.Unlock()
+
 	if _, ok := u.logSuppressionCounter[counterName]; !ok {
 		u.logSuppressionCounter[counterName] = 0
 	}
 }
 
 const hidWriteTimeout = 50 * time.Millisecond
+
+// maxHidReportBacklog caps how many callers may queue behind one HID device
+// lock. A stalled host makes every write cost hidWriteTimeout, so pointer events
+// arrive far faster than they retire and each waiter pins a goroutine stack.
+const maxHidReportBacklog = 8
+
+// errHidReportDropped is returned when a HID report was discarded because the
+// device already has maxHidReportBacklog reports queued.
+var errHidReportDropped = errors.New("hid report dropped: device is not draining reports")
+
+// enterHidBacklog reserves a slot in front of a HID device lock, returning false
+// if the backlog is full so the caller drops the report instead of blocking.
+// Buttons and absolute position are re-asserted by the next report; relative
+// motion is genuinely lost, which is the trade against unbounded growth.
+func enterHidBacklog(backlog *atomic.Int32) bool {
+	if backlog.Add(1) > maxHidReportBacklog {
+		backlog.Add(-1)
+		return false
+	}
+	return true
+}
 
 func (u *UsbGadget) writeWithTimeout(file *os.File, data []byte) (n int, err error) {
 	if err := file.SetWriteDeadline(time.Now().Add(hidWriteTimeout)); err != nil {
