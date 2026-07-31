@@ -16,33 +16,63 @@ export default function useKeyboard() {
   const isReinitializingGadget = useHidStore(state => state.isReinitializingGadget);
   const usbState = useHidStore(state => state.usbState);
 
-  // Track held keys for keepalive
-  const heldKeysRef = useRef<Set<number>>(new Set());
-  const keepaliveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // keyboardReport is an absolute snapshot, so last write wins and one slot is
+  // enough. desiredStateRef is what the device should be in, lastSentRef what we
+  // think it is in.
+  const desiredStateRef = useRef<{ keys: number[]; modifiers: number[] }>({
+    keys: [],
+    modifiers: [],
+  });
+  const lastSentRef = useRef<string>("");
+
+  const flushKeyboardState = useCallback(() => {
+    // Undeliverable right now. Forget what the device is believed to know so the
+    // state is re-asserted once the channel is usable; dropping it here is how a
+    // key-up goes missing and the host repeats the key forever.
+    if (
+      (!forceHttp && rpcDataChannel?.readyState !== "open") ||
+      isReinitializingGadget ||
+      usbState !== "configured"
+    ) {
+      lastSentRef.current = "";
+      return;
+    }
+
+    const { keys, modifiers } = desiredStateRef.current;
+    const accModifier = modifiers.reduce((acc, val) => acc + val, 0);
+    const signature = `${accModifier}:${keys.join(",")}`;
+    if (signature === lastSentRef.current) return;
+    lastSentRef.current = signature;
+
+    send("keyboardReport", { keys, modifier: accModifier }, resp => {
+      if ("error" in resp) {
+        // The device did not take it, so stop claiming it knows this state.
+        lastSentRef.current = "";
+        const msg = (resp.error.data as string) || resp.error.message || "";
+        if (msg.includes("cannot send after transport endpoint shutdown") && usbState === "configured") {
+          notifications.error("Please check if the cable and connection are stable.", { duration: 5000 });
+        }
+      }
+    });
+  }, [forceHttp, rpcDataChannel?.readyState, send, isReinitializingGadget, usbState]);
 
   const sendKeyboardEvent = useCallback(
     (keys: number[], modifiers: number[]) => {
-      if (!forceHttp && rpcDataChannel?.readyState !== "open") return;
-      // Don't send keyboard events while reinitializing gadget
-      if (isReinitializingGadget) return;
-      if (usbState !== "configured") return;
-      const accModifier = modifiers.reduce((acc, val) => acc + val, 0);
+      desiredStateRef.current = { keys, modifiers };
 
-      // Fallback to JSON-RPC
-      send("keyboardReport", { keys, modifier: accModifier }, resp => {
-        if ("error" in resp) {
-          const msg = (resp.error.data as string) || resp.error.message || "";
-          if (msg.includes("cannot send after transport endpoint shutdown") && usbState === "configured") {
-            notifications.error("Please check if the cable and connection are stable.", { duration: 5000 });
-          }
-        }
-      });
-
-      // We do this for the info bar to display the currently pressed keys for the user
+      // Unconditional: keyUpHandler derives the next report from this store, so
+      // a released key left in it gets re-asserted by every later report.
       updateActiveKeysAndModifiers({ keys: keys, modifiers: modifiers });
+
+      flushKeyboardState();
     },
-    [forceHttp, rpcDataChannel?.readyState, send, updateActiveKeysAndModifiers, isReinitializingGadget, usbState],
+    [flushKeyboardState, updateActiveKeysAndModifiers],
   );
+
+  // Resync on reconnect; nothing else tells a fresh channel what's held down.
+  useEffect(() => {
+    flushKeyboardState();
+  }, [flushKeyboardState]);
 
   // Send per-key press/release
   const sendKeypress = useCallback(
@@ -59,13 +89,9 @@ export default function useKeyboard() {
   );
 
   const resetKeyboardState = useCallback(() => {
-    // Release all held keys
+    // Release all held keys; if the device is unreachable this is retained as
+    // the desired state and re-asserted on reconnect.
     sendKeyboardEvent([], []);
-    heldKeysRef.current.clear();
-    if (keepaliveIntervalRef.current) {
-      clearInterval(keepaliveIntervalRef.current);
-      keepaliveIntervalRef.current = null;
-    }
   }, [sendKeyboardEvent]);
 
   // Cleanup on unmount
