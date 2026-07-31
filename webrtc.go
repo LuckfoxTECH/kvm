@@ -236,6 +236,9 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 		if connectionState == webrtc.ICEConnectionStateClosed {
 			scopedLogger.Debug().Msg("ICE Connection State is closed, unmounting virtual media")
 			if session == currentSession {
+				// No key-up is coming from this browser. Guarded on
+				// currentSession so a handover doesn't clear the new one's keys.
+				_ = rpcKeyboardReport(0, keyboardClearStateKeys)
 				currentSession = nil
 			}
 			if session.shouldUmountVirtualMedia {
@@ -300,7 +303,12 @@ func onFirstSessionConnected() {
 	}
 }
 
+// keyboardClearStateKeys is an all-keys-up report; the HID report has six slots.
+var keyboardClearStateKeys = make([]uint8, 6)
+
 func onLastSessionDisconnected() {
+	// Safety net: nobody is left to send a key-up.
+	_ = rpcKeyboardReport(0, keyboardClearStateKeys)
 	_ = writeCtrlAction("stop_video")
 	StopNtpAudioServer()
 }
