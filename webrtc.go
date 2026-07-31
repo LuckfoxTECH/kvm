@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"strings"
+	"sync"
 
 	"kvm/internal/logging"
 
@@ -123,12 +124,29 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 	}
 	session := &Session{peerConnection: peerConnection}
 
+	// Idempotent. One worker process-wide: the gadget is a singleton.
+	startKeyboardRPCWorker()
+
+	// NewPeerConnection has already started the RTCP interceptor goroutines and
+	// their tickers, so every failure path from here on has to close it.
+	sessionReady := false
+	defer func() {
+		if !sessionReady {
+			_ = peerConnection.Close()
+		}
+	}()
+
 	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
 		scopedLogger.Info().Str("label", d.Label()).Uint16("id", *d.ID()).Msg("New DataChannel")
 		switch d.Label() {
 		case "rpc":
 			session.RPCChannel = d
 			d.OnMessage(func(msg webrtc.DataChannelMessage) {
+				// pion delivers these in order; only the worker keeps it.
+				if isKeyboardReport(msg.Data) {
+					enqueueKeyboardRPC(msg, session)
+					return
+				}
 				go onRPCMessage(msg, session)
 			})
 			triggerOTAStateUpdate()
@@ -197,7 +215,7 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 
 	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
 		scopedLogger.Info().Interface("candidate", candidate).Msg("WebRTC peerConnection has a new ICE candidate")
-		if candidate != nil {
+		if candidate != nil && sessionConfig.ws != nil {
 			err := wsjson.Write(context.Background(), sessionConfig.ws, gin.H{"type": "new-ice-candidate", "data": candidate.ToJSON()})
 			if err != nil {
 				scopedLogger.Warn().Err(err).Msg("failed to write new-ice-candidate to WebRTC signaling channel")
@@ -210,10 +228,10 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 		if connectionState == webrtc.ICEConnectionStateConnected {
 			if !isConnected {
 				isConnected = true
-				actionSessions++
+				activeSessions := incrActiveSessions()
 				onActiveSessionsChanged()
 				setNpuAppStatus()
-				if actionSessions == 1 {
+				if activeSessions == 1 {
 					onFirstSessionConnected()
 				}
 			}
@@ -226,6 +244,9 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 		if connectionState == webrtc.ICEConnectionStateClosed {
 			scopedLogger.Debug().Msg("ICE Connection State is closed, unmounting virtual media")
 			if session == currentSession {
+				// No key-up is coming from this browser. Guarded on
+				// currentSession so a handover doesn't clear the new one's keys.
+				_ = rpcKeyboardReport(0, keyboardClearStateKeys)
 				currentSession = nil
 			}
 			if session.shouldUmountVirtualMedia {
@@ -234,18 +255,50 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 			}
 			if isConnected {
 				isConnected = false
-				actionSessions--
+				activeSessions := decrActiveSessions()
 				onActiveSessionsChanged()
-				if actionSessions == 0 {
+				if activeSessions == 0 {
 					onLastSessionDisconnected()
 				}
 			}
 		}
 	})
+
+	sessionReady = true
 	return session, nil
 }
 
-var actionSessions = 0
+var (
+	actionSessions      = 0
+	activeSessionsMutex sync.Mutex
+)
+
+// incrActiveSessions, decrActiveSessions and getActiveSessions guard the
+// active session counter. It is mutated from pion's ICE state-change
+// callbacks, which run on per-PeerConnection goroutines, and read from the
+// HTTP video broadcaster callbacks, so a bare int is a data race.
+func incrActiveSessions() int {
+	activeSessionsMutex.Lock()
+	defer activeSessionsMutex.Unlock()
+
+	actionSessions++
+	return actionSessions
+}
+
+func decrActiveSessions() int {
+	activeSessionsMutex.Lock()
+	defer activeSessionsMutex.Unlock()
+
+	actionSessions--
+	return actionSessions
+}
+
+func getActiveSessions() int {
+	activeSessionsMutex.Lock()
+	defer activeSessionsMutex.Unlock()
+
+	return actionSessions
+}
 
 func onActiveSessionsChanged() {
 	requestDisplayUpdate(true)
@@ -258,7 +311,12 @@ func onFirstSessionConnected() {
 	}
 }
 
+// keyboardClearStateKeys is an all-keys-up report; the HID report has six slots.
+var keyboardClearStateKeys = make([]uint8, 6)
+
 func onLastSessionDisconnected() {
+	// Safety net: nobody is left to send a key-up.
+	_ = rpcKeyboardReport(0, keyboardClearStateKeys)
 	_ = writeCtrlAction("stop_video")
 	StopNtpAudioServer()
 }

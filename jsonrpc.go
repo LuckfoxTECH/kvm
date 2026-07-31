@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pion/webrtc/v4"
@@ -124,6 +125,47 @@ func DispatchRPCRequest(request JSONRPCRequest) (JSONRPCResponse, error) {
 		Result:  result,
 		ID:      request.ID,
 	}, nil
+}
+
+// keyboardRPCMessage is a data-channel frame routed to the ordered keyboard worker.
+type keyboardRPCMessage struct {
+	msg     webrtc.DataChannelMessage
+	session *Session
+}
+
+var (
+	keyboardRPCQueue      = make(chan keyboardRPCMessage, 64)
+	keyboardRPCWorkerOnce sync.Once
+)
+
+// keyboardReport is an absolute keys-down snapshot, so applying two of them out
+// of order latches a key down until something else corrects it. Don't dispatch
+// these with `go`.
+func startKeyboardRPCWorker() {
+	keyboardRPCWorkerOnce.Do(func() {
+		go func() {
+			for m := range keyboardRPCQueue {
+				onRPCMessage(m.msg, m.session)
+			}
+		}()
+	})
+}
+
+// isKeyboardReport reports whether a raw JSON-RPC frame is a keyboardReport call.
+// It matches on the method field only: setKeyboardMacros carries user-supplied
+// names, so a plain substring test would misroute a macro called "keyboardReport".
+func isKeyboardReport(data []byte) bool {
+	var probe struct {
+		Method string `json:"method"`
+	}
+	return json.Unmarshal(data, &probe) == nil && probe.Method == "keyboardReport"
+}
+
+// enqueueKeyboardRPC blocks rather than dropping; a dropped report is the bug
+// this queue exists to prevent. Keyboard traffic is human-rate, so 64 slots only
+// fill if the HID endpoint has been stalled for seconds.
+func enqueueKeyboardRPC(msg webrtc.DataChannelMessage, session *Session) {
+	keyboardRPCQueue <- keyboardRPCMessage{msg: msg, session: session}
 }
 
 func onRPCMessage(message webrtc.DataChannelMessage, session *Session) {
