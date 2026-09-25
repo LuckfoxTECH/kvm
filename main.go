@@ -10,6 +10,7 @@ import (
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/gwatts/rootcerts"
+	"kvm/internal/kvmswitch"
 )
 
 var appCtx context.Context
@@ -176,6 +177,16 @@ func Main() {
 
 	// Initialize VPN
 	initVPN()
+
+	kvmswitch.InitSwitch()
+	if config.KvmSwitch != nil {
+		kvmswitch.GlobalSwitch.UpdateConfig(
+			config.KvmSwitch.Enabled,
+			config.KvmSwitch.SwitchIP,
+			config.KvmSwitch.SwitchPort,
+			config.KvmSwitch.PollIntervalSec,
+		)
+	}
 
 	go RunWebServer()
 

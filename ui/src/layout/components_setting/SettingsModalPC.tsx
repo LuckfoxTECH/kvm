@@ -8,6 +8,7 @@ import {
   ToolOutlined,
   TagOutlined,
   RightOutlined,
+  AppstoreOutlined,
 } from "@ant-design/icons";
 import { useReactAt } from "i18n-auto-extractor/react";
 
@@ -17,6 +18,7 @@ import SettingsNetwork from "@/layout/components_setting/network/NetworkContent"
 import SettingsHardware from "@/layout/components_setting/hardware/HardwareContent";
 import SettingsAdvanced from "@/layout/components_setting/advanced/AdvancedContent";
 import SettingsVersion from "@/layout/components_setting/version/VersionContent";
+import { KvmSwitchSettings } from "@/components/KvmSwitchSettings";
 import { dark_bd_style, dark_bg2_style } from "@/layout/theme_color";
 
 interface MenuItem {
@@ -38,6 +40,7 @@ const SettingsModalPC: React.FC<SettingsDialogProps> = ({ visible = true }) => {
     { key: "network", label: "Network", icon: <WifiOutlined /> },
     { key: "access", label: "Access", icon: <SafetyCertificateOutlined /> },
     { key: "hardware", label: "Hardware", icon: <DesktopOutlined /> },
+    { key: "kvmswitch", label: "KVM Switch", icon: <AppstoreOutlined /> },
     { key: "advanced", label: "Advanced", icon: <ToolOutlined /> },
     { key: "version", label: "Version", icon: <TagOutlined /> },
   ];
@@ -56,6 +59,8 @@ const SettingsModalPC: React.FC<SettingsDialogProps> = ({ visible = true }) => {
         return <SettingsAccessIndex />;
       case "hardware":
         return <SettingsHardware />;
+      case "kvmswitch":
+        return <KvmSwitchSettings />;
       case "advanced":
         return <SettingsAdvanced />;
       case "version":

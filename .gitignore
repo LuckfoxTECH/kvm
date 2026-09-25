@@ -10,3 +10,8 @@ ui/.i18n_extractor.json
 
 device-tests.tar.gz
 .worktrees/
+build/
+deploy.sh
+strings.sh
+strings.txt
+kvm_display_bin

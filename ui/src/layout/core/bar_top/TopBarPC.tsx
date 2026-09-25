@@ -19,6 +19,7 @@ import { cx } from "@/cva.config";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import LogoLuckfox from "@assets/logo-luckfox.png";
 import MacroTopBar from "@/layout/components_side/Macros/MacroTopBar";
+import { KvmSwitchSelector } from "@/components/KvmSwitchSelector";
 import { dark_bg2_style } from "@/layout/theme_color";
 import { useTheme } from "@/layout/contexts/ThemeContext";
 
@@ -121,6 +122,8 @@ export default function TopBarPC({
             >
               {$at("Power")}
             </AntdButton>
+            
+            <KvmSwitchSelector />
 
             <AntdButton
               type={"text"}
@@ -138,7 +141,6 @@ export default function TopBarPC({
             >
               {$at("Terminal")}
             </AntdButton>
-
 
             <div className="hidden lg:block">
 

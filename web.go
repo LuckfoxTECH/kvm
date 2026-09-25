@@ -175,6 +175,14 @@ func setupRouter() *gin.Engine {
 		protected.GET("/terminal/ws", handleTerminalWS)
 		protected.GET("/serial/ws", handleSerialWS)
 		protected.GET("/video/stream", handleVideoStream)
+
+		protected.GET("/api/kvm-switch/config", handleGetKvmSwitchConfig)
+		protected.POST("/api/kvm-switch/config", handleSetKvmSwitchConfig)
+		protected.GET("/api/kvm-switch/status", handleGetKvmSwitchStatus)
+		protected.POST("/api/kvm-switch/select", handleSetKvmSwitchSelect)
+		protected.POST("/api/kvm-switch/test", handleTestKvmSwitchConnection)
+		protected.GET("/api/kvm-switch/network", handleGetKvmSwitchNetwork)
+		protected.POST("/api/kvm-switch/network", handleSetKvmSwitchNetwork)
 	}
 
 	// Catch-all route for SPA
@@ -1109,3 +1117,4 @@ func handleSessionRequest(
 	_ = wsjson.Write(context.Background(), c, gin.H{"type": "answer", "data": sd})
 	return nil
 }
+

@@ -145,6 +145,17 @@ type Config struct {
 	SerialDataBits             int                    `json:"serial_data_bits,omitempty"`
 	SerialStopBits             string                 `json:"serial_stop_bits,omitempty"` // "1", "1.5", "2"
 	SerialParity               string                 `json:"serial_parity,omitempty"`   // "none", "odd", "even", "mark", "space"
+	KvmSwitch                  *KvmSwitchConfig       `json:"kvm_switch,omitempty"`
+}
+
+type KvmSwitchConfig struct {
+	Enabled         bool           `json:"enabled"`
+	SwitchIP        string         `json:"switch_ip"`
+	SwitchPort      int            `json:"switch_port"`
+	TotalPorts      int            `json:"total_ports"`
+	PortNames       map[int]string `json:"port_names"`
+	HotkeysEnabled  bool           `json:"hotkeys_enabled"`
+	PollIntervalSec int            `json:"poll_interval_sec"`
 }
 
 type AutoMountImageConfig struct {
@@ -263,6 +274,15 @@ var defaultConfig = &Config{
 		},
 		Rules:        []FirewallRule{},
 		PortForwards: []FirewallPortRule{},
+	},
+	KvmSwitch: &KvmSwitchConfig{
+		Enabled:         false,
+		SwitchIP:        "",
+		SwitchPort:      5000,
+		TotalPorts:      4,
+		PortNames:       map[int]string{1: "Server 1", 2: "Server 2", 3: "Server 3", 4: "Server 4"},
+		HotkeysEnabled:  true,
+		PollIntervalSec: 5,
 	},
 }
 
@@ -410,6 +430,12 @@ func LoadConfig() {
 
 	if loadedConfig.TurnServers == nil {
 		loadedConfig.TurnServers = []TurnServer{}
+	}
+
+	if loadedConfig.KvmSwitch == nil {
+		loadedConfig.KvmSwitch = defaultConfig.KvmSwitch
+	} else if loadedConfig.KvmSwitch.PortNames == nil {
+		loadedConfig.KvmSwitch.PortNames = defaultConfig.KvmSwitch.PortNames
 	}
 
 	config = &loadedConfig
