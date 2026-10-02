@@ -253,7 +253,7 @@ func rpcReinitializeUsbGadget() error {
 	mediaState, _ := rpcGetVirtualMediaState()
 	if mediaState != nil && (mediaState.Filename != "" || mediaState.URL != "") {
 		usbLogger.Info().Interface("mediaState", mediaState).Msg("virtual media mounted, unmounting before USB reinit")
-		if err := rpcUnmountImage(); err != nil {
+		if _, err := unmountImageCore(); err != nil {
 			usbLogger.Warn().Err(err).Msg("failed to unmount virtual media before USB reinit")
 		}
 	}
@@ -324,7 +324,7 @@ func rpcReinitializeUsbGadgetSoft() error {
 	mediaState, _ := rpcGetVirtualMediaState()
 	if mediaState != nil && (mediaState.Filename != "" || mediaState.URL != "") {
 		usbLogger.Info().Interface("mediaState", mediaState).Msg("virtual media mounted, unmounting before USB soft reinit")
-		if err := rpcUnmountImage(); err != nil {
+		if _, err := unmountImageCore(); err != nil {
 			usbLogger.Warn().Err(err).Msg("failed to unmount virtual media before USB soft reinit")
 		}
 	}
