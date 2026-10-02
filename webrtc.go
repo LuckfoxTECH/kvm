@@ -229,7 +229,7 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 				currentSession = nil
 			}
 			if session.shouldUmountVirtualMedia {
-				err := rpcUnmountImage()
+				_, err := unmountImageCore()
 				scopedLogger.Warn().Err(err).Msg("unmount image failed on connection close")
 			}
 			if isConnected {

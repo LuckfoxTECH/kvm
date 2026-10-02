@@ -200,9 +200,11 @@ func rpcGetVirtualMediaState() (*VirtualMediaState, error) {
 	return currentVirtualMediaState, nil
 }
 
-func rpcUnmountImage() error {
+func unmountImageCore() (*VirtualMediaState, error) {
 	virtualMediaStateMutex.Lock()
 	defer virtualMediaStateMutex.Unlock()
+
+	unmountedState := currentVirtualMediaState
 
 	var err error
 	for i := 0; i < 3; i++ {
@@ -215,7 +217,7 @@ func rpcUnmountImage() error {
 	}
 	if err != nil {
 		logger.Warn().Err(err).Msg("Remove Mass Storage Image Error after retries")
-		return fmt.Errorf("device or resource busy")
+		return unmountedState, fmt.Errorf("device or resource busy")
 	}
 
 	time.Sleep(500 * time.Millisecond)
@@ -225,7 +227,45 @@ func rpcUnmountImage() error {
 	}
 	currentVirtualMediaState = nil
 	clearPersistedVirtualMediaState()
+	return unmountedState, nil
+}
+
+func rpcUnmountImage() error {
+	unmountedState, err := unmountImageCore()
+	if err != nil {
+		return err
+	}
+	clearAutoMountConfigIfMatch(unmountedState)
 	return nil
+}
+
+// clearAutoMountConfigIfMatch clears the auto-mount config when the unmounted
+// file was set for auto-mount, so an explicit unmount keeps it unmounted.
+func clearAutoMountConfigIfMatch(state *VirtualMediaState) {
+	if state == nil || state.Filename == "" {
+		return
+	}
+
+	var autoMountSource string
+	switch state.Source {
+	case Storage:
+		autoMountSource = "kvm"
+	case SDStorage:
+		autoMountSource = "sd"
+	default:
+		return
+	}
+
+	if config.AutoMountImage == nil || config.AutoMountImage.Filename != state.Filename || config.AutoMountImage.Source != autoMountSource {
+		return
+	}
+
+	config.AutoMountImage = nil
+	if err := SaveConfig(); err != nil {
+		logger.Error().Err(err).Msg("failed to clear auto-mount config after unmount")
+	} else {
+		logger.Info().Str("filename", state.Filename).Msg("cleared auto-mount config after unmount")
+	}
 }
 
 var httpRangeReader *httpreadat.RangeReader

@@ -1351,7 +1351,7 @@ func updateUsbRelatedConfig() error {
 func rpcSetUsbDevices(usbDevices usbgadget.Devices) error {
 	mediaState, _ := rpcGetVirtualMediaState()
 	if mediaState != nil && mediaState.Filename != "" {
-		err := rpcUnmountImage()
+		_, err := unmountImageCore()
 		if err != nil {
 			jsonRpcLogger.Error().Err(err).Msg("failed to unmount image")
 		}

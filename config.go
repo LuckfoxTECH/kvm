@@ -128,7 +128,7 @@ type Config struct {
 	TimeZone                   string                 `json:"time_zone"`
 	LEDGreenMode               string                 `json:"led_green_mode"`
 	LEDYellowMode              string                 `json:"led_yellow_mode"`
-	AutoMountImage             *AutoMountImageConfig  `json:"auto_mount_image,omitempty"`
+	AutoMountImage             *AutoMountImageConfig  `json:"auto_mount_image"`
 	EasytierAutoStart          bool                   `json:"easytier_autostart"`
 	EasytierConfig             EasytierConfig         `json:"easytier_config"`
 	VntAutoStart               bool                   `json:"vnt_autostart"`
@@ -144,7 +144,7 @@ type Config struct {
 	SerialBaudRate             int                    `json:"serial_baud_rate,omitempty"`
 	SerialDataBits             int                    `json:"serial_data_bits,omitempty"`
 	SerialStopBits             string                 `json:"serial_stop_bits,omitempty"` // "1", "1.5", "2"
-	SerialParity               string                 `json:"serial_parity,omitempty"`   // "none", "odd", "even", "mark", "space"
+	SerialParity               string                 `json:"serial_parity,omitempty"`    // "none", "odd", "even", "mark", "space"
 }
 
 type AutoMountImageConfig struct {
@@ -252,7 +252,7 @@ var defaultConfig = &Config{
 	AudioMode:            "disabled",
 	LEDGreenMode:         "network-rx",
 	LEDYellowMode:        "kernel-activity",
-	AutoMountImage:       &AutoMountImageConfig{Filename: "system_info.img", Source: "kvm"},
+	AutoMountImage:       nil,
 	WireguardAutoStart:   false,
 	NpuAppEnabled:        false,
 	Firewall: &FirewallConfig{
