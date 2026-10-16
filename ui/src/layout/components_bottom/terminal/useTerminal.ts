@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 
-import { useRTCStore, useSettingsStore } from "@/hooks/stores";
+import { useJsonRpc } from "@/hooks/useJsonRpc";
+import { useRTCStore, useSerialStore, useSettingsStore } from "@/hooks/stores";
 
 class WebSocketDataChannel extends EventTarget {
   binaryType: BinaryType = "arraybuffer";
@@ -78,9 +79,43 @@ const buildWsUrl = (path: string) => {
 
 export const useTerminal = () => {
   const peerConnection = useRTCStore(state => state.peerConnection);
+  const serialConsole = useRTCStore(state => state.serialConsole);
+  const rpcDataChannel = useRTCStore(state => state.rpcDataChannel);
   const setSerialConsole = useRTCStore(state => state.setSerialConsole);
   const setKvmTerminal = useRTCStore(state => state.setKvmTerminal);
+  const setIsConnected = useSerialStore(state => state.setIsConnected);
   const forceHttp = useSettingsStore(state => state.forceHttp);
+  const [send] = useJsonRpc();
+
+  // The backend owns the serial port state, so ask it whenever the serial
+  // channel comes up instead of guessing from the local UI state.
+  useEffect(() => {
+    if (!serialConsole) return;
+
+    const rpcReady = () => forceHttp || rpcDataChannel?.readyState === "open";
+
+    const syncSerialStatus = () => {
+      // The status query would be dropped silently while the RPC channel is
+      // still connecting, so wait for it.
+      if (!rpcReady()) return;
+
+      send("getSerialSettings", {}, resp => {
+        if ("error" in resp) return;
+        const settings = resp.result as { connected?: boolean };
+        setIsConnected(settings?.connected === true);
+      });
+    };
+
+    syncSerialStatus();
+    serialConsole.addEventListener("open", syncSerialStatus);
+    rpcDataChannel?.addEventListener("open", syncSerialStatus);
+
+    return () => {
+      serialConsole.removeEventListener("open", syncSerialStatus);
+      rpcDataChannel?.removeEventListener("open", syncSerialStatus);
+    };
+  }, [serialConsole, rpcDataChannel, forceHttp, send, setIsConnected]);
+
   useEffect(() => {
     let cleanup: (() => void) | null = null;
 

@@ -12,7 +12,7 @@ import { FloatButton } from "antd";
 import FBSvg1 from "@assets/second/float_button1.svg?react"
 import FBSvg2 from "@assets/second/float_button2.svg?react"
 
-import { AvailableTerminalTypes, useSerialStore, useUiStore } from "@/hooks/stores";
+import { AvailableTerminalTypes, useUiStore } from "@/hooks/stores";
 import TerminalSerialSide from "@/layout/components_bottom/terminal/TerminalSerialSide";
 import { TERMINAL_CONFIG } from "@/layout/components_bottom/terminal/common";
 import Drawer from"@components/Drawer"
@@ -28,7 +28,6 @@ function TerminalSerial({dataChannel} : {
 }) {
   const enableTerminal = "serial";
   const setDisableKeyboardFocusTrap = useUiStore(state => state.setDisableVideoFocusTrap);
-  const { isConnected } = useSerialStore();
   const { instance, ref } = useXTerm({ options: TERMINAL_CONFIG });
   const [readyState, setReadyState] = useState(dataChannel.readyState);
 
@@ -66,10 +65,6 @@ function TerminalSerial({dataChannel} : {
       e => {
         // Handle binary data differently based on browser implementation
         // Firefox sends data as blobs, chrome sends data as arraybuffer
-        console.log("TerminalSerial message", e.data);
-        if (!isConnected) {
-          return;
-        }
         const data = e.data;
         if (typeof data === "string") {
             instance.write(data);
@@ -90,9 +85,6 @@ function TerminalSerial({dataChannel} : {
     );
 
     const onDataHandler = instance.onData(data => {
-      if (!isConnected) {
-        return;
-      }
       if (dataChannel.readyState === "open") {
         try {
           dataChannel.send(data);
@@ -113,7 +105,7 @@ function TerminalSerial({dataChannel} : {
       abortController.abort();
       onDataHandler.dispose();
     };
-  }, [instance, dataChannel, readyState, isConnected]);
+  }, [instance, dataChannel, readyState]);
 
   useEffect(() => {
     if (!instance) return;

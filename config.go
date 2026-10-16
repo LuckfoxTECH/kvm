@@ -143,8 +143,9 @@ type Config struct {
 	PersistedVirtualMediaState *VirtualMediaState     `json:"persisted_virtual_media_state,omitempty"`
 	SerialBaudRate             int                    `json:"serial_baud_rate,omitempty"`
 	SerialDataBits             int                    `json:"serial_data_bits,omitempty"`
-	SerialStopBits             string                 `json:"serial_stop_bits,omitempty"` // "1", "1.5", "2"
-	SerialParity               string                 `json:"serial_parity,omitempty"`   // "none", "odd", "even", "mark", "space"
+	SerialStopBits             string                 `json:"serial_stop_bits,omitempty"`    // "1", "1.5", "2"
+	SerialParity               string                 `json:"serial_parity,omitempty"`       // "none", "odd", "even", "mark", "space"
+	SerialPortEnabled          bool                   `json:"serial_port_enabled,omitempty"` // user intent: keep the serial port open across reloads and reboots
 }
 
 type AutoMountImageConfig struct {

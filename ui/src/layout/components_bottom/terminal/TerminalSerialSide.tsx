@@ -23,6 +23,7 @@ interface SerialSettings {
   dataBits: string;
   stopBits: string;
   parity: string;
+  connected?: boolean;
 }
 
 interface TerminalSerialSideProps {
@@ -64,11 +65,14 @@ const TerminalSerialSide: React.FC<TerminalSerialSideProps> = ({ clearTerminal }
         );
         return;
       }
-      console.log(resp.result)
       const newSettings = resp.result as SerialSettings;
       setSettings(newSettings);
       form.setFieldsValue(newSettings);
-      
+
+      // The port state lives in the backend: a page reload keeps the port open,
+      // so trust the server instead of the local button state.
+      setIsConnected(newSettings.connected === true);
+
       // Ensure current baud rate is in options
       if (!defaultBaudRates.includes(newSettings.baudRate)) {
         setBaudOptions([...defaultBaudRates, newSettings.baudRate]);

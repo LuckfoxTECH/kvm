@@ -1073,18 +1073,20 @@ func rpcSetActiveExtension(extensionId string) error {
 }
 
 type SerialSettings struct {
-	BaudRate string `json:"baudRate"`
-	DataBits string `json:"dataBits"`
-	StopBits string `json:"stopBits"`
-	Parity   string `json:"parity"`
+	BaudRate  string `json:"baudRate"`
+	DataBits  string `json:"dataBits"`
+	StopBits  string `json:"stopBits"`
+	Parity    string `json:"parity"`
+	Connected bool   `json:"connected"`
 }
 
 func rpcGetSerialSettings() (SerialSettings, error) {
 	settings := SerialSettings{
-		BaudRate: strconv.Itoa(serialPortMode.BaudRate),
-		DataBits: strconv.Itoa(serialPortMode.DataBits),
-		StopBits: "1",
-		Parity:   "none",
+		BaudRate:  strconv.Itoa(serialPortMode.BaudRate),
+		DataBits:  strconv.Itoa(serialPortMode.DataBits),
+		StopBits:  "1",
+		Parity:    "none",
+		Connected: getSerialPort() != nil,
 	}
 
 	switch serialPortMode.StopBits {
@@ -1114,12 +1116,18 @@ func rpcGetSerialSettings() (SerialSettings, error) {
 
 var serialPortMode = defaultMode
 
+// serialPortEnabled is the persisted user intent. When true the port is opened
+// on boot and stays open across page reloads until the user disconnects it.
+var serialPortEnabled bool
+
 // loadSerialSettingsFromConfig loads serial port settings from config into serialPortMode.
 // Called during LoadConfig to restore persisted settings.
 func loadSerialSettingsFromConfig() {
 	if config == nil {
 		return
 	}
+
+	serialPortEnabled = config.SerialPortEnabled
 
 	// Only apply if config has serial settings saved (non-zero baud rate)
 	if config.SerialBaudRate == 0 {
@@ -1206,6 +1214,7 @@ func saveSerialSettingsToConfig() error {
 	config.SerialDataBits = serialPortMode.DataBits
 	config.SerialStopBits = stopBits
 	config.SerialParity = parity
+	config.SerialPortEnabled = serialPortEnabled
 
 	if err := SaveConfig(); err != nil {
 		return fmt.Errorf("failed to save serial settings: %w", err)
@@ -1290,8 +1299,8 @@ func rpcSetSerialSettings(settings SerialSettings) error {
 		// Continue anyway - settings are still applied in memory
 	}
 
-	if port != nil {
-		if err := port.SetMode(serialPortMode); err != nil {
+	if p := getSerialPort(); p != nil {
+		if err := p.SetMode(serialPortMode); err != nil {
 			logger.Error().Err(err).Msg("failed to set port mode")
 		} else {
 			logger.Info().Msg("port mode updated successfully")
@@ -1310,9 +1319,17 @@ func rpcConnectSerial() error {
 		Int("data_bits", serialPortMode.DataBits).
 		Msg("rpcConnectSerial called")
 
-	if err := reopenSerialPort(); err != nil {
+	// Only open when closed: a forced reopen would discard the bytes the kernel
+	// has already buffered.
+	if err := ensureSerialPortOpen(); err != nil {
 		logger.Error().Err(err).Msg("failed to connect serial port")
 		return fmt.Errorf("failed to connect serial port: %w", err)
+	}
+
+	// Persist the intent so page reloads and reboots keep the port open.
+	serialPortEnabled = true
+	if err := saveSerialSettingsToConfig(); err != nil {
+		logger.Warn().Err(err).Msg("failed to persist serial port enabled state")
 	}
 
 	logger.Info().Msg("serial port connected successfully")
@@ -1323,12 +1340,17 @@ func rpcConnectSerial() error {
 func rpcDisconnectSerial() error {
 	logger.Info().Msg("rpcDisconnectSerial called")
 
-	if port != nil {
-		port.Close()
-		port = nil
+	if getSerialPort() != nil {
+		closeSerialPort()
 		logger.Info().Msg("serial port disconnected")
 	} else {
 		logger.Warn().Msg("serial port was already disconnected")
+	}
+
+	// Clear the intent so the port is not reopened after a reload or a reboot.
+	serialPortEnabled = false
+	if err := saveSerialSettingsToConfig(); err != nil {
+		logger.Warn().Err(err).Msg("failed to persist serial port enabled state")
 	}
 
 	return nil

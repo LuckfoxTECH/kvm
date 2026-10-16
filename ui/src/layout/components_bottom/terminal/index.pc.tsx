@@ -9,7 +9,7 @@ import { useReactAt } from "i18n-auto-extractor/react";
 
 import TerminalKVM from "@/layout/components_bottom/terminal/TerminalKVM";
 import TerminalSerial from "@/layout/components_bottom/terminal/TerminalSerial";
-import { useRTCStore, useUiStore } from "@/hooks/stores";
+import { useRTCStore, useSerialStore, useUiStore } from "@/hooks/stores";
 import {
   button_primary_color,
 
@@ -66,6 +66,21 @@ const IndexPc: React.FC = () => {
   const isKVMEnabled = kvmTerminal !== null;
   const isSerialEnabled = serialConsole !== null;
 
+  // Indicator light: green only when the serial channel is up AND the backend
+  // port is really open (the port state is owned by the server).
+  const serialConnected = useSerialStore(state => state.isConnected);
+  const serialChannelOpen = serialConsole?.readyState === "open";
+  const isSerialLive = isSerialEnabled && serialChannelOpen && serialConnected;
+  const serialDotClass = clsx(
+    "inline-block w-2.5 h-2.5 rounded-full shrink-0",
+    isSerialLive
+      ? "bg-emerald-500 shadow-[0_0_8px_2px_rgba(16,185,129,0.7)]"
+      : "bg-gray-400 ring-1 ring-gray-500/50",
+  );
+  const serialDotTitle = isSerialLive
+    ? $at("Serial port connected")
+    : $at("Serial port disconnected");
+
   const renderCustomTabBar: TabsProps["renderTabBar"] = () => {
     return (
       <div className={`w-full flex justify-between p-[1px_8px] ${dark_bg2_style}`}>
@@ -113,6 +128,7 @@ const IndexPc: React.FC = () => {
               }
             }}
           >
+            <span title={serialDotTitle} className={serialDotClass} />
             {$at("Serial Console")}
             {!isSerialEnabled && (
               <span className="text-xs text-red-500 font-normal">
