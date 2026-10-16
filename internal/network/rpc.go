@@ -118,7 +118,17 @@ func (s *NetworkInterfaceState) RpcSetNetworkSettings(settings RpcNetworkSetting
         return nil
     }
 
+    // apply IPv4 settings immediately when any of them changed
+    ipv4Changed := !IsSame(currentSettings.IPv4Mode, settings.IPv4Mode) ||
+        !IsSame(currentSettings.IPv4Static, settings.IPv4Static) ||
+        !IsSame(currentSettings.IPv4RequestAddress, settings.IPv4RequestAddress)
+
 	s.config = &settings.NetworkConfig
+	if ipv4Changed {
+		if err := s.applyIPv4Mode(); err != nil {
+			s.l.Error().Err(err).Msg("failed to apply IPv4 mode after config change")
+		}
+	}
 	s.onConfigChange(s.config)
 
 	return nil
