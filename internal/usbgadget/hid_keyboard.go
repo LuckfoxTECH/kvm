@@ -276,6 +276,10 @@ func (u *UsbGadget) ReopenKeyboardHidFile() error {
 	return u.reopenKeyboardHidFile()
 }
 
+// keyboardWriteAttempts bounds how long a keyboard report waits for the host,
+// at hidWriteTimeout per attempt, before it is dropped.
+const keyboardWriteAttempts = 10
+
 func (u *UsbGadget) keyboardWriteHidFileLocked(modifier byte, keys []byte) error {
 	if len(keys) > 6 {
 		keys = keys[:6]
@@ -292,7 +296,21 @@ func (u *UsbGadget) keyboardWriteHidFileLocked(modifier byte, keys []byte) error
 		}
 	}
 
-	_, err := u.writeWithTimeout(u.keyboardHidFile, data)
+	// A report can't be written until the host has collected the previous
+	// one. Dropping it loses key state, and a dropped release leaves the key
+	// held on the host, which auto-repeats it, so retry before giving up.
+	var err error
+	for attempt := 0; attempt < keyboardWriteAttempts; attempt++ {
+		_, err = u.writeWithTimeout(u.keyboardHidFile, data)
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			break
+		}
+	}
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		// The host has stopped collecting reports. Drop this one, as before,
+		// rather than reopen the HID file.
+		return nil
+	}
 	if err != nil {
 		u.logWithSupression("keyboardWriteHidFile", 100, u.log, err, "failed to write to hidg0")
 		u.closeKeyboardHidFileLocked()
