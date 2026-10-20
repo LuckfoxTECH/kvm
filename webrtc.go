@@ -259,6 +259,9 @@ func onFirstSessionConnected() {
 }
 
 func onLastSessionDisconnected() {
-	_ = writeCtrlAction("stop_video")
+	// When last WebRTC session disconnects and there's no HTTP video subscriber, stop video
+	if videoBroadcaster.count.Load() == 0 {
+		_ = writeCtrlAction("stop_video")
+	}
 	StopNtpAudioServer()
 }
