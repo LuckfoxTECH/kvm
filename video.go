@@ -19,6 +19,21 @@ func writeCtrlAction(action string) error {
 	return err
 }
 
+// stopVideo stops the encoder. kvm_video's snapshot thread exits with the
+// encoder and is never created again, so after the next start_video every
+// jpeg_take_snapshot times out. jpeg_capture_stop joins the exited thread so
+// the next snapshot creates a new one. Only send it after stop_video: while the
+// thread is still running it blocks kvm_video's control loop.
+func stopVideo() {
+	if err := writeCtrlAction("stop_video"); err != nil {
+		videoLogger.Warn().Err(err).Msg("failed to stop video")
+		return
+	}
+	if _, err := CallCtrlAction("jpeg_capture_stop", nil); err != nil {
+		videoLogger.Warn().Err(err).Msg("failed to reset the JPEG snapshot thread")
+	}
+}
+
 type VideoInputState struct {
 	Ready          bool    `json:"ready"`
 	Error          string  `json:"error,omitempty"` // no_signal, no_lock, out_of_range

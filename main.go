@@ -112,7 +112,7 @@ func Main() {
 	videoBroadcaster.onLastUnsubscribe = func() {
 		if actionSessions == 0 {
 			logger.Info().Msg("Last HTTP video subscriber disconnected, stopping video stream")
-			_ = writeCtrlAction("stop_video")
+			stopVideo()
 		}
 	}
 

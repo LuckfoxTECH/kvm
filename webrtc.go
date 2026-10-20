@@ -259,6 +259,6 @@ func onFirstSessionConnected() {
 }
 
 func onLastSessionDisconnected() {
-	_ = writeCtrlAction("stop_video")
+	stopVideo()
 	StopNtpAudioServer()
 }
