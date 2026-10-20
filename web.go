@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -80,8 +81,6 @@ func setupRouter() *gin.Engine {
 	))
 	staticFS, _ := fs.Sub(staticFiles, "static")
 
-	r.Any("/debug/pprof/*any", gin.WrapH(http.DefaultServeMux))
-
 	// Add a custom middleware to set cache headers for images
 	// This is crucial for optimizing the initial welcome screen load time
 	// By enabling caching, we ensure that pre-loaded images are stored in the browser cache
@@ -114,27 +113,33 @@ func setupRouter() *gin.Engine {
 	// We use this to setup the device in the welcome page
 	r.POST("/device/setup", handleSetup)
 
-	// A Prometheus metrics endpoint.
-	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	// Debug endpoints (pprof + Prometheus metrics) are registered here but gated per
+	// request by devModeOnlyMiddleware: they answer 404 unless developer mode is on.
+	debugRouter := r.Group("/", devModeOnlyMiddleware())
+	{
+		// pprof. Durations are capped because one long CPU profile pegs the single
+		// Cortex-A7 core and makes the device unresponsive.
+		debugRouter.GET("/debug/pprof/", gin.WrapF(pprof.Index))
+		debugRouter.GET("/debug/pprof/cmdline", gin.WrapF(pprof.Cmdline))
+		debugRouter.GET("/debug/pprof/profile", clampProfileSeconds(pprof.Profile, maxProfileSeconds))
+		debugRouter.POST("/debug/pprof/symbol", gin.WrapF(pprof.Symbol))
+		debugRouter.GET("/debug/pprof/symbol", gin.WrapF(pprof.Symbol))
+		debugRouter.GET("/debug/pprof/trace", clampProfileSeconds(pprof.Trace, maxProfileSeconds))
+		debugRouter.GET("/debug/pprof/allocs", gin.WrapH(pprof.Handler("allocs")))
+		debugRouter.GET("/debug/pprof/block", gin.WrapH(pprof.Handler("block")))
+		debugRouter.GET("/debug/pprof/goroutine", gin.WrapH(pprof.Handler("goroutine")))
+		debugRouter.GET("/debug/pprof/heap", gin.WrapH(pprof.Handler("heap")))
+		debugRouter.GET("/debug/pprof/mutex", gin.WrapH(pprof.Handler("mutex")))
+		debugRouter.GET("/debug/pprof/threadcreate", gin.WrapH(pprof.Handler("threadcreate")))
+
+		// A Prometheus metrics endpoint.
+		debugRouter.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	}
 
 	// Developer mode protected routes
 	developerModeRouter := r.Group("/developer/")
 	developerModeRouter.Use(basicAuthProtectedMiddleware(true))
 	{
-		// pprof
-		developerModeRouter.GET("/pprof/", gin.WrapF(pprof.Index))
-		developerModeRouter.GET("/pprof/cmdline", gin.WrapF(pprof.Cmdline))
-		developerModeRouter.GET("/pprof/profile", gin.WrapF(pprof.Profile))
-		developerModeRouter.POST("/pprof/symbol", gin.WrapF(pprof.Symbol))
-		developerModeRouter.GET("/pprof/symbol", gin.WrapF(pprof.Symbol))
-		developerModeRouter.GET("/pprof/trace", gin.WrapF(pprof.Trace))
-		developerModeRouter.GET("/pprof/allocs", gin.WrapH(pprof.Handler("allocs")))
-		developerModeRouter.GET("/pprof/block", gin.WrapH(pprof.Handler("block")))
-		developerModeRouter.GET("/pprof/goroutine", gin.WrapH(pprof.Handler("goroutine")))
-		developerModeRouter.GET("/pprof/heap", gin.WrapH(pprof.Handler("heap")))
-		developerModeRouter.GET("/pprof/mutex", gin.WrapH(pprof.Handler("mutex")))
-		developerModeRouter.GET("/pprof/threadcreate", gin.WrapH(pprof.Handler("threadcreate")))
-
 		logging.AttachSSEHandler(developerModeRouter)
 	}
 
@@ -568,6 +573,53 @@ func handleLogout(c *gin.Context) {
 	// Clear the auth cookie
 	c.SetCookie("authToken", "", -1, "/", "", false, true)
 	c.JSON(http.StatusOK, gin.H{"message": "Logout successful"})
+}
+
+// maxProfileSeconds caps how long /debug/pprof/profile and /debug/pprof/trace may
+// sample the CPU. The device has a single core, so a long profile makes it unusable.
+const maxProfileSeconds = 10
+
+// devModeOnlyMiddleware gates the debug endpoints (pprof, metrics). Developer mode
+// must be enabled. Password-protected setups additionally require the WebUI session
+// cookie, while noPassword setups are let through so the debug panel stays usable.
+func devModeOnlyMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		devModeState, err := rpcGetDevModeState()
+		if err != nil || !devModeState.Enabled {
+			// Answer 404 so the endpoints do not advertise their existence.
+			c.AbortWithStatus(http.StatusNotFound)
+			return
+		}
+
+		if config.LocalAuthMode != "noPassword" {
+			authToken, err := c.Cookie("authToken")
+			if err != nil || authToken == "" || authToken != config.LocalAuthToken {
+				c.AbortWithStatus(http.StatusNotFound)
+				return
+			}
+		}
+
+		c.Next()
+	}
+}
+
+// clampProfileSeconds rewrites the seconds query parameter so a single request cannot
+// sample the CPU for longer than maxSeconds. pprof defaults to 30s when the parameter
+// is missing, so the default has to be clamped as well.
+func clampProfileSeconds(handler http.HandlerFunc, maxSeconds int) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		query := c.Request.URL.Query()
+		seconds := maxSeconds
+		if raw := query.Get("seconds"); raw != "" {
+			if requested, err := strconv.Atoi(raw); err == nil && requested > 0 && requested < seconds {
+				seconds = requested
+			}
+		}
+		query.Set("seconds", strconv.Itoa(seconds))
+		c.Request.URL.RawQuery = query.Encode()
+
+		handler(c.Writer, c.Request)
+	}
 }
 
 func protectedMiddleware() gin.HandlerFunc {

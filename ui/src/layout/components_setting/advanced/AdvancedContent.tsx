@@ -30,6 +30,7 @@ export default function SettingsAdvanced() {
   const [localLoopbackOnly, setLocalLoopbackOnly] = useState(false);
   const [apiKey, setApiKey] = useState<string>("");
   const [apiKeyInput, setApiKeyInput] = useState<string>("");
+  const [devModeEnabled, setDevModeEnabled] = useState(false);
   const [showApiKeyClearWarning, setShowApiKeyClearWarning] = useState(false);
 
   const settings = useSettingsStore();
@@ -62,6 +63,13 @@ export default function SettingsAdvanced() {
       const key = resp.result as string;
       setApiKey(key);
       setApiKeyInput(key);
+    });
+
+    send("getDevModeState", {}, resp => {
+      if ("error" in resp) return;
+      const state = resp.result as { enabled: boolean };
+      setDevModeEnabled(Boolean(state?.enabled));
+      setDeveloperMode(Boolean(state?.enabled));
     });
   }, [send, setDeveloperMode]);
 
@@ -104,6 +112,27 @@ export default function SettingsAdvanced() {
       });
     },
     [send],
+  );
+
+  const handleDevModeToggle = useCallback(
+    (enabled: boolean) => {
+      send("setDevModeState", { enabled }, resp => {
+        if ("error" in resp) {
+          notifications.error(
+            `Failed to ${enabled ? "enable" : "disable"} developer mode: ${resp.error.data || "Unknown error"}`,
+          );
+          return;
+        }
+        setDevModeEnabled(enabled);
+        setDeveloperMode(enabled);
+        notifications.success(
+          enabled
+            ? "Developer mode enabled: /debug/pprof and /metrics are now reachable"
+            : "Developer mode disabled: /debug/pprof and /metrics now return 404",
+        );
+      });
+    },
+    [send, setDeveloperMode],
   );
 
   const handleResetConfig = useCallback(() => {
@@ -267,6 +296,21 @@ export default function SettingsAdvanced() {
             onChange={e => handleLoopbackOnlyModeChange(e.target.checked)}
           />
         </SettingsItem>
+
+        {isOnDevice && (
+          <SettingsItem
+            title={$at("Developer Mode")}
+            description={$at(
+              "Expose /debug/pprof and /metrics for troubleshooting. Turn this off when you are done.",
+            )}
+            noCol
+          >
+            <Checkbox
+              checked={devModeEnabled}
+              onChange={e => handleDevModeToggle(e.target.checked)}
+            />
+          </SettingsItem>
+        )}
 
         {isOnDevice && (
           <div className="space-y-4">

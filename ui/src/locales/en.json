@@ -374,6 +374,8 @@
   "9e1b8a17a2": "Access additional settings for troubleshooting and customization",
   "0ce762644e": "Loopback-Only Mode",
   "49aea4318d": "Restrict web interface access to localhost only (127.0.0.1)",
+  "62d46e95f5": "Developer Mode",
+  "6d36baf99b": "Expose /debug/pprof and /metrics for troubleshooting. Turn this off when you are done.",
   "af761a417b": "SSH Access",
   "2eec49b1fe": "Add your SSH public key to enable secure remote access to the device",
   "96092cbe14": "SSH Public Key",

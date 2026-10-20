@@ -688,6 +688,20 @@ func rpcGetDevModeState() (DevModeState, error) {
 	}, nil
 }
 
+func rpcSetDevModeState(enabled bool) error {
+	if enabled {
+		if err := os.WriteFile(devModeFile, []byte{}, 0644); err != nil {
+			return fmt.Errorf("error enabling dev mode: %w", err)
+		}
+		return nil
+	}
+
+	if err := os.Remove(devModeFile); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("error disabling dev mode: %w", err)
+	}
+	return nil
+}
+
 func rpcGetSSHKeyState() (string, error) {
 	keyData, err := os.ReadFile(sshKeyFile)
 	if err != nil {
@@ -1989,6 +2003,7 @@ var rpcHandlers = map[string]RPCHandler{
 	"getUpdateDownloadProxy":    {Func: rpcGetUpdateDownloadProxy},
 	"setUpdateDownloadProxy":    {Func: rpcSetUpdateDownloadProxy, Params: []string{"proxy"}},
 	"getDevModeState":           {Func: rpcGetDevModeState},
+	"setDevModeState":           {Func: rpcSetDevModeState, Params: []string{"enabled"}},
 	"getSSHKeyState":            {Func: rpcGetSSHKeyState},
 	"setSSHKeyState":            {Func: rpcSetSSHKeyState, Params: []string{"sshKey"}},
 	"getApiKey":                 {Func: rpcGetApiKey},
