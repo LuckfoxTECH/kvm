@@ -113,8 +113,20 @@ func (u *UsbGadget) AbsMouseReport(x, y int, buttons uint8) error {
 		return err
 	}
 
+	u.absMouseX = x
+	u.absMouseY = y
+
 	u.resetUserInputTime()
 	return nil
+}
+
+// GetAbsMousePosition returns the last absolute mouse position reported to the host,
+// in HID logical units (0-32767).
+func (u *UsbGadget) GetAbsMousePosition() (x, y int) {
+	u.absMouseLock.Lock()
+	defer u.absMouseLock.Unlock()
+
+	return u.absMouseX, u.absMouseY
 }
 
 func (u *UsbGadget) AbsMouseWheelReport(wheelY int8) error {

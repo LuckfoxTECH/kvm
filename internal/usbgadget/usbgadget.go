@@ -60,6 +60,8 @@ type UsbGadget struct {
 	keyboardLock    sync.Mutex
 	absMouseHidFile *os.File
 	absMouseLock    sync.Mutex
+	absMouseX       int // last absolute X reported to the host, HID logical units (0-32767)
+	absMouseY       int // last absolute Y reported to the host, HID logical units (0-32767)
 	relMouseHidFile *os.File
 	relMouseLock    sync.Mutex
 
@@ -153,9 +155,6 @@ func newUsbGadget(name string, configMap map[string]gadgetConfigItem, enabledDev
 // ResetHIDFiles closes all open HID gadget file descriptors.
 // After a UDC rebind, previously open /dev/hidg* handles may point to a stale
 // transport endpoint and must be reopened before use.
-//
-// Backported from upstream jetkvm/kvm commit 15dc380 ("fix: auto-recover USB
-// gadget when host power-cycles (#1297)").
 func (u *UsbGadget) ResetHIDFiles() {
 	u.keyboardLock.Lock()
 	u.closeKeyboardHidFileLocked()

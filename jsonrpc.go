@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pion/webrtc/v4"
@@ -1775,6 +1776,145 @@ func StopJpegCapture() error {
 	return nil
 }
 
+const (
+	snapshotReadyTimeout = 5 * time.Second
+	snapshotAttempts     = 2
+	snapshotPollAttempts = 20
+	snapshotPollInterval = 250 * time.Millisecond
+	snapshotStreamLinger = 15 * time.Second
+)
+
+var (
+	snapshotStreamMu    sync.Mutex
+	snapshotStreamSubID string
+	snapshotStreamTimer *time.Timer
+)
+
+// ensureSnapshotStream makes sure the native encoder is running. It is only started
+// while a video consumer is attached (main.go onFirstSubscribe/onLastUnsubscribe,
+// webrtc.go onFirstSessionConnected), so with no WebUI open it stays idle and the
+// native app answers "snapshot failed". Subscribing starts it, and the first frame
+// confirms the encoder is actually producing data.
+func ensureSnapshotStream() error {
+	snapshotStreamMu.Lock()
+	defer snapshotStreamMu.Unlock()
+
+	if snapshotStreamSubID != "" {
+		// a previous capture already started the stream, just extend its linger
+		if snapshotStreamTimer != nil {
+			snapshotStreamTimer.Reset(snapshotStreamLinger)
+		}
+		return nil
+	}
+
+	subID, frames := videoBroadcaster.Subscribe()
+	snapshotStreamSubID = subID
+
+	// Drain the subscription for its whole lifetime. Every subscriber gets a 1MB
+	// pooled buffer per frame (maxFrameSize = 1920*1080/2) and the channel holds up
+	// to 200 of them, so a subscriber that stops reading pins ~200MB and the device
+	// runs out of memory. Draining keeps the channel empty and returns buffers to the
+	// pool.
+	firstFrame := make(chan struct{}, 1)
+	go func() {
+		for frame := range frames {
+			frame.Release()
+			select {
+			case firstFrame <- struct{}{}:
+			default:
+			}
+		}
+	}()
+
+	select {
+	case <-firstFrame:
+		return nil
+	case <-time.After(snapshotReadyTimeout):
+		return fmt.Errorf("no video frame received within %s", snapshotReadyTimeout)
+	}
+}
+
+// releaseSnapshotStream keeps the stream alive for a linger period so back-to-back
+// captures do not restart the native encoder each time.
+func releaseSnapshotStream() {
+	snapshotStreamMu.Lock()
+	defer snapshotStreamMu.Unlock()
+
+	if snapshotStreamSubID == "" {
+		return
+	}
+
+	if snapshotStreamTimer == nil {
+		snapshotStreamTimer = time.AfterFunc(snapshotStreamLinger, stopSnapshotStream)
+		return
+	}
+
+	snapshotStreamTimer.Reset(snapshotStreamLinger)
+}
+
+// stopSnapshotStream drops the snapshot subscription; the broadcaster then stops the
+// native stream unless somebody else is still watching.
+func stopSnapshotStream() {
+	snapshotStreamMu.Lock()
+	subID := snapshotStreamSubID
+	snapshotStreamSubID = ""
+	snapshotStreamMu.Unlock()
+
+	if subID != "" {
+		videoBroadcaster.Unsubscribe(subID)
+	}
+}
+
+func readSnapshotFile() ([]byte, error) {
+	data, err := os.ReadFile(jpegScreenshotPath)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("snapshot file is empty")
+	}
+	return data, nil
+}
+
+// takeSnapshot triggers one JPEG capture and reads the encoded file.
+func takeSnapshot() ([]byte, error) {
+	os.Remove(jpegScreenshotPath)
+
+	// drain any stale signal before triggering
+	select {
+	case <-jpegReadyCh:
+	default:
+	}
+
+	if _, err := CallCtrlAction("jpeg_take_snapshot", nil); err != nil {
+		logger.Error().Err(err).Msg("jpeg_take_snapshot failed")
+		return nil, fmt.Errorf("failed to trigger JPEG capture: %w", err)
+	}
+
+	// wait for the jpeg_ready event from native, fall back to polling on timeout
+	select {
+	case <-jpegReadyCh:
+		if data, err := readSnapshotFile(); err == nil {
+			logger.Info().Int("size", len(data)).Msg("JPEG captured successfully")
+			return data, nil
+		} else {
+			logger.Warn().Err(err).Msg("jpeg_ready received but snapshot file not readable")
+		}
+	case <-time.After(snapshotReadyTimeout):
+		logger.Warn().Msg("jpeg_ready event not received, falling back to polling")
+	}
+
+	for i := 0; i < snapshotPollAttempts; i++ {
+		if data, err := readSnapshotFile(); err == nil {
+			logger.Info().Int("size", len(data)).Msg("JPEG captured (fallback polling)")
+			return data, nil
+		}
+		time.Sleep(snapshotPollInterval)
+	}
+
+	return nil, fmt.Errorf("JPEG file not found at %s", jpegScreenshotPath)
+}
+
 // captureScreenshot captures a JPEG screenshot using hardware encoder.
 func captureScreenshot(format string) ([]byte, error) {
 	if format != "jpeg" && format != "jpg" {
@@ -1787,43 +1927,25 @@ func captureScreenshot(format string) ([]byte, error) {
 		logger.Warn().Err(err).Msg("failed to create screenshot directory")
 	}
 
-	os.Remove(jpegScreenshotPath)
-
-	// drain any stale signal before triggering
-	select {
-	case <-jpegReadyCh:
-	default:
+	if err := ensureSnapshotStream(); err != nil {
+		logger.Warn().Err(err).Msg("snapshot stream not ready, trying snapshot anyway")
 	}
+	defer releaseSnapshotStream()
 
-	_, err := CallCtrlAction("jpeg_take_snapshot", nil)
-	if err != nil {
-		logger.Error().Err(err).Msg("jpeg_take_snapshot failed")
-		return nil, fmt.Errorf("failed to trigger JPEG capture: %w", err)
-	}
-
-	// wait for jpeg_ready event from native, fall back to polling on timeout
-	timeout := time.NewTimer(2 * time.Second)
-	defer timeout.Stop()
-	select {
-	case <-jpegReadyCh:
-	case <-timeout.C:
-		logger.Warn().Msg("jpeg_ready event not received within 2s, falling back to polling")
-		for i := 0; i < 5; i++ {
-			if data, err := os.ReadFile(jpegScreenshotPath); err == nil && len(data) > 0 {
-				logger.Info().Int("size", len(data)).Msg("JPEG captured (fallback polling)")
-				return data, nil
-			}
-			time.Sleep(200 * time.Millisecond)
+	var lastErr error
+	for attempt := 1; attempt <= snapshotAttempts; attempt++ {
+		data, err := takeSnapshot()
+		if err == nil {
+			return data, nil
 		}
-		return nil, fmt.Errorf("JPEG file not found at %s", jpegScreenshotPath)
+		lastErr = err
+		logger.Warn().Err(err).Int("attempt", attempt).Msg("snapshot attempt failed")
+		if attempt < snapshotAttempts {
+			time.Sleep(500 * time.Millisecond)
+		}
 	}
 
-	data, err := os.ReadFile(jpegScreenshotPath)
-	if err != nil || len(data) == 0 {
-		return nil, fmt.Errorf("JPEG file not readable after jpeg_ready event: %w", err)
-	}
-	logger.Info().Int("size", len(data)).Msg("JPEG captured successfully")
-	return data, nil
+	return nil, lastErr
 }
 
 var rpcHandlers = map[string]RPCHandler{

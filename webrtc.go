@@ -259,6 +259,9 @@ func onFirstSessionConnected() {
 }
 
 func onLastSessionDisconnected() {
-	_ = writeCtrlAction("stop_video")
+	// keep the native stream running when HTTP /video/stream subscribers are still watching
+	if videoBroadcaster.SubscriberCount() == 0 {
+		_ = writeCtrlAction("stop_video")
+	}
 	StopNtpAudioServer()
 }

@@ -85,9 +85,9 @@ func withAPIKeyAuth(next http.Handler, expectedKey string) http.Handler {
 
 func registerMCPTools(s *server.MCPServer) {
 	s.AddTool(mcp.NewTool("mouse_move_absolute",
-		mcp.WithDescription("Move mouse to absolute coordinates (0-32767)"),
-		mcp.WithNumber("x", mcp.Required(), mcp.Description("X coordinate")),
-		mcp.WithNumber("y", mcp.Required(), mcp.Description("Y coordinate")),
+		mcp.WithDescription("Move mouse to absolute pixel coordinates of the video input (0..width-1, 0..height-1)"),
+		mcp.WithNumber("x", mcp.Required(), mcp.Description("X pixel coordinate")),
+		mcp.WithNumber("y", mcp.Required(), mcp.Description("Y pixel coordinate")),
 	), handleMouseMoveAbsolute)
 
 	s.AddTool(mcp.NewTool("mouse_move_relative",
@@ -103,7 +103,8 @@ func registerMCPTools(s *server.MCPServer) {
 
 	s.AddTool(mcp.NewTool("mouse_scroll",
 		mcp.WithDescription("Scroll mouse wheel"),
-		mcp.WithNumber("delta", mcp.Required()),
+		mcp.WithNumber("delta", mcp.Required(), mcp.Description("Wheel steps, clamped to -127..127")),
+		mcp.WithString("mouseMode", mcp.Description("Mouse mode of the target machine: absolute (default) or relative"), mcp.Enum("absolute", "relative")),
 	), handleMouseScroll)
 
 	s.AddTool(mcp.NewTool("keyboard_key",
@@ -117,8 +118,8 @@ func registerMCPTools(s *server.MCPServer) {
 	), handleKeyboardCombo)
 
 	s.AddTool(mcp.NewTool("type_text",
-		mcp.WithDescription("Type text string"),
-		mcp.WithString("text", mcp.Required()),
+		mcp.WithDescription("Type an ASCII text string"),
+		mcp.WithString("text", mcp.Required(), mcp.Description("Text to type, ASCII only")),
 	), handleTypeText)
 
 	s.AddTool(mcp.NewTool("capture_screenshot",
@@ -136,13 +137,40 @@ func handleMouseMoveAbsolute(ctx context.Context, req mcp.CallToolRequest) (*mcp
 	args := req.GetArguments()
 	x, _ := args["x"].(float64)
 	y, _ := args["y"].(float64)
-	_, err := callRPCHandler(rpcHandlers["absMouseReport"], map[string]interface{}{
-		"x": x, "y": y, "buttons": 0,
+
+	state, err := rpcGetVideoState()
+	if err != nil {
+		return nil, err
+	}
+	if state.Width < 2 || state.Height < 2 {
+		return nil, fmt.Errorf("video resolution unknown (%dx%d), cannot map pixel coordinates", state.Width, state.Height)
+	}
+
+	// clamp into the visible area, then scale pixels to HID logical units (0-32767)
+	maxX := state.Width - 1
+	maxY := state.Height - 1
+	px := int(x)
+	py := int(y)
+	if px < 0 {
+		px = 0
+	} else if px > maxX {
+		px = maxX
+	}
+	if py < 0 {
+		py = 0
+	} else if py > maxY {
+		py = maxY
+	}
+	absX := (px*32767 + maxX/2) / maxX
+	absY := (py*32767 + maxY/2) / maxY
+
+	_, err = callRPCHandler(rpcHandlers["absMouseReport"], map[string]interface{}{
+		"x": absX, "y": absY, "buttons": 0,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return mcp.NewToolResultText(fmt.Sprintf("Mouse moved to (%d, %d)", int(x), int(y))), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Mouse moved to pixel (%d, %d)", px, py)), nil
 }
 
 func handleMouseMoveRelative(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -169,32 +197,52 @@ func handleMouseClick(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 		buttons = 2
 	case "middle":
 		buttons = 4
+	default:
+		return nil, fmt.Errorf("unknown button: %s", button)
 	}
+
+	// absolute reports always carry a position, so click where the pointer already is
+	// instead of teleporting it to (0, 0)
+	x, y := gadget.GetAbsMousePosition()
+
 	_, err := callRPCHandler(rpcHandlers["absMouseReport"], map[string]interface{}{
-		"x": 0, "y": 0, "buttons": buttons,
+		"x": x, "y": y, "buttons": buttons,
 	})
 	if err != nil {
 		return nil, err
 	}
 	_, err = callRPCHandler(rpcHandlers["absMouseReport"], map[string]interface{}{
-		"x": 0, "y": 0, "buttons": 0,
+		"x": x, "y": y, "buttons": 0,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return mcp.NewToolResultText(fmt.Sprintf("Clicked %s button", button)), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Clicked %s button at HID (%d, %d)", button, x, y)), nil
 }
 
 func handleMouseScroll(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	delta, _ := args["delta"].(float64)
+	mouseMode, _ := args["mouseMode"].(string)
+	if mouseMode == "" {
+		mouseMode = "absolute"
+	}
+
+	// the HID wheel field is signed 8-bit, clamp instead of wrapping around
+	steps := int(delta)
+	if steps > 127 {
+		steps = 127
+	} else if steps < -127 {
+		steps = -127
+	}
+
 	_, err := callRPCHandler(rpcHandlers["wheelReport"], map[string]interface{}{
-		"wheelY": delta,
+		"wheelY": steps, "mouseMode": mouseMode,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return mcp.NewToolResultText(fmt.Sprintf("Scrolled by %d", int(delta))), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Scrolled by %d (%s mode)", steps, mouseMode)), nil
 }
 
 func handleKeyboardKey(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -266,7 +314,10 @@ func handleKeyboardCombo(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
 func handleTypeText(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	text, _ := args["text"].(string)
-	for _, char := range text {
+	for i, char := range text {
+		if char > 0x7F {
+			return nil, fmt.Errorf("unsupported non-ASCII character %q at byte index %d, only ASCII text can be typed", char, i)
+		}
 		keyCode, modifier, ok := charToKeyCode(uint8(char))
 		if !ok {
 			continue
