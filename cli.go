@@ -1,12 +1,14 @@
 package kvm
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,7 +34,24 @@ func RunCLI(args []string) {
 	}
 }
 
-var apiBaseURL = "http://localhost:8080/api/lan"
+// apiBaseURL is only a placeholder host: cliHTTPClient always dials the unix
+// socket, so the host part is never resolved and no TCP port is opened.
+var apiBaseURL = "http://unix/api/lan"
+
+var cliHTTPClient = &http.Client{
+	Transport: &http.Transport{
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, "unix", cliAPISocketPath)
+		},
+	},
+}
+
+// cliConnectionError keeps the "is kvm_app running?" hint but also names the
+// socket, so a permission or missing-daemon problem is obvious.
+func cliConnectionError(err error) error {
+	return fmt.Errorf("failed to connect to kvm_app at %s: %w\nIs kvm_app running?", cliAPISocketPath, err)
+}
 
 func apiPost(path string, body interface{}) error {
 	jsonBody, err := json.Marshal(body)
@@ -40,9 +59,9 @@ func apiPost(path string, body interface{}) error {
 		return err
 	}
 	
-	resp, err := http.Post(apiBaseURL+path, "application/json", strings.NewReader(string(jsonBody)))
+	resp, err := cliHTTPClient.Post(apiBaseURL+path, "application/json", strings.NewReader(string(jsonBody)))
 	if err != nil {
-		return fmt.Errorf("failed to connect to API server: %w\nIs kvm_app running?", err)
+		return cliConnectionError(err)
 	}
 	defer resp.Body.Close()
 	
@@ -60,9 +79,9 @@ func apiPost(path string, body interface{}) error {
 }
 
 func apiGetBytes(path string) ([]byte, error) {
-	resp, err := http.Get(apiBaseURL + path)
+	resp, err := cliHTTPClient.Get(apiBaseURL + path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to API server: %w\nIs kvm_app running?", err)
+		return nil, cliConnectionError(err)
 	}
 	defer resp.Body.Close()
 
@@ -74,9 +93,9 @@ func apiGetBytes(path string) ([]byte, error) {
 }
 
 func apiGetJSON(path string) (map[string]interface{}, error) {
-	resp, err := http.Get(apiBaseURL + path)
+	resp, err := cliHTTPClient.Get(apiBaseURL + path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to API server: %w\nIs kvm_app running?", err)
+		return nil, cliConnectionError(err)
 	}
 	defer resp.Body.Close()
 
@@ -100,7 +119,7 @@ Usage:
   kvm_app cli <command>     Run CLI commands for HID control
 
 Commands:
-  cli    HID control via API (mouse, keyboard, capture, status, signer)
+  cli    HID control via unix socket (mouse, keyboard, capture, status, signer)
 
 Examples:
   kvm_app cli mouse move 100 200

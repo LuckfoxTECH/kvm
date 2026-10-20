@@ -346,7 +346,7 @@ export default function SettingsAdvanced() {
           <div className="space-y-4">
             <SettingsItem
               title={$at("API Key")}
-              description={$at("API key for MCP and REST API authentication")}
+              description={$at("MCP API key for authenticating MCP clients")}
             />
             <div className="space-y-4">
               <TextAreaWithLabel
@@ -357,7 +357,7 @@ export default function SettingsAdvanced() {
                 placeholder={$at("Enter API key or leave empty to auto-generate")}
               />
               <p className="text-xs text-slate-600 dark:text-[#ffffff]">
-                {$at("Used for authenticating MCP and REST API requests.")}
+                {$at("Used for authenticating MCP requests.")}
               </p>
               <div className="flex items-center gap-x-2">
                 <AntdButton

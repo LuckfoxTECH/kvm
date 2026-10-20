@@ -139,7 +139,7 @@ type Config struct {
 	NetbirdManagementURL       string                 `json:"netbird_management_url"`
 	NpuAppEnabled              bool                   `json:"npu_app_enabled"`
 	Firewall                   *FirewallConfig        `json:"firewall"`
-	APIKey                     string                 `json:"api_key"`
+	APIKey                     string                 `json:"api_key"` // MCP-only API key, used by mcp.go
 	PersistedVirtualMediaState *VirtualMediaState     `json:"persisted_virtual_media_state,omitempty"`
 	SerialBaudRate             int                    `json:"serial_baud_rate,omitempty"`
 	SerialDataBits             int                    `json:"serial_data_bits,omitempty"`
@@ -514,12 +514,16 @@ func SaveConfig() error {
 	return nil
 }
 
+// apiKeyPrefix marks MCP API keys so a leaked key is recognizable on sight.
+// Keys generated before this prefix existed stay valid as they are.
+const apiKeyPrefix = "lfk_mcp_"
+
 func generateAPIKey() (string, error) {
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
 		return "", err
 	}
-	return hex.EncodeToString(bytes), nil
+	return apiKeyPrefix + hex.EncodeToString(bytes), nil
 }
 
 func ensureConfigLoaded() {

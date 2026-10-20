@@ -179,9 +179,9 @@ func Main() {
 
 	go RunWebServer()
 
-	// API and MCP services temporarily disabled for debugging
+	// Local CLI API (unix socket, no auth) and the MCP server (API key auth)
 	go func() {
-		StartAPIServer(8080)
+		StartAPIServer(cliAPISocketPath)
 	}()
 
 	go func() {
