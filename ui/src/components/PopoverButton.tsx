@@ -49,7 +49,7 @@ const BottomPopoverButton: React.FC<PopoverButtonProps> = ({
             </PopoverButton>
 
             <PopoverPanel
-              className={`absolute z-10 bottom-full mb-1  ${align === "left" ? "left-0" : "right-0"} transition duration-300 ease-out data-closed:translate-y-8 data-closed:opacity-0`}
+              className={`absolute z-50 bottom-full mb-1  ${align === "left" ? "left-0" : "right-0"} transition duration-300 ease-out data-closed:translate-y-8 data-closed:opacity-0`}
               transition
             >
               {panelContent}

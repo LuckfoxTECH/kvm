@@ -1,4 +1,6 @@
 import { LuMaximize } from "react-icons/lu";
+import { BsWrench } from "react-icons/bs";
+import { useReactAt } from "i18n-auto-extractor/react";
 import OpenSvg from "@assets/second/open.svg?react";
 import CopeSvg from "@assets/second/copy.svg?react";
 import Setting2Svg from "@assets/second/set2.svg?react";
@@ -9,6 +11,7 @@ import ZhongDuanSvg2 from "@assets/second/zhongduan2.svg?react";
 import LogoLuckfox from "@assets/logo-luckfox.png";
 import { useHidStore, useUiStore } from "@/hooks/stores";
 import MacroTopBar from "@/layout/components_side/Macros/MacroTopBar";
+import { BarsPinButton } from "@/layout/core/bar_autohide";
 import {
   button_primary_color,
   dark_bd_style,
@@ -148,12 +151,38 @@ export default function MobileTopBar({ requestFullscreen }: { requestFullscreen:
         topBarView !== "SettingsModal" &&  topBarView !== "ClipboardMobile" &&
         sidebarView !== "TerminalTabsMobile"&&
         sidebarView !== "PowerControl"&&
-        <div className={`h-10 w-full bg-white border-b ${dark_bd_style} ${dark_bg_style_fun(isDark)}`}>
-          <MacroTopBar />
+        <div className={`flex h-10 w-full items-center bg-white border-b ${dark_bd_style} ${dark_bg_style_fun(isDark)}`}>
+          <div className="min-w-0 flex-1">
+            <MacroTopBar />
+          </div>
+          <ToolsToggleButton />
+          <BarsPinButton fontSize={14} />
         </div>
       }
 
     </div>
+  );
+}
+
+function ToolsToggleButton() {
+  const { $at } = useReactAt();
+  const mobileToolsHidden = useUiStore(state => state.mobileToolsHidden);
+  const setMobileToolsHidden = useUiStore(state => state.setMobileToolsHidden);
+  const label = mobileToolsHidden ? $at("Show tools") : $at("Hide tools");
+
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={!mobileToolsHidden}
+      onClick={() => setMobileToolsHidden(!mobileToolsHidden)}
+      className={`h-full px-3 shrink-0 bg-transparent border-0 cursor-pointer ${
+        mobileToolsHidden ? `text-black ${dark_font_style}` : text_primary_color
+      }`}
+    >
+      <BsWrench fontSize={14} />
+    </button>
   );
 }
 

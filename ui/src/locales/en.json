@@ -689,5 +689,10 @@
   "8338be3157": "MCP server is listening on port 8081",
   "99110ed059": "MCP server is disabled, port 8081 is closed",
   "3b52296a33": "Used for authenticating MCP requests. The server cannot be enabled without a key.",
-  "62b4d53ce0": "Enabled, but not listening on port 8081"
+  "62b4d53ce0": "Enabled, but not listening on port 8081",
+  "7911f83d53": "Pin bars",
+  "7623da11b3": "Unpin bars",
+  "101c1c159f": "Show tools",
+  "74bc71db4d": "Hide tools",
+  "a445a2a2a0": "Show bars"
 }

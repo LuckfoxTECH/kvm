@@ -80,53 +80,77 @@ interface UIState {
   setTerminalType: (enabled: UIState["terminalType"]) => void;
   otherSession:boolean;
   setOtherSession: (enabled: boolean) => void;
+
+  // Top and bottom bars are hidden by default and act as a single unit.
+  barsPinned: boolean;
+  setBarsPinned: (pinned: boolean) => void;
+  barsTemporarilyVisible: boolean;
+  setBarsTemporarilyVisible: (visible: boolean) => void;
+
+  // The floating mobile tool cluster (gesture/mouse/keyboard/reset view).
+  mobileToolsHidden: boolean;
+  setMobileToolsHidden: (hidden: boolean) => void;
 }
 
-export const useUiStore = create<UIState>(set => ({
-  terminalType: "none",
-  setTerminalType: type => set({ terminalType: type }),
+export const useUiStore = create<UIState>()(
+  persist<UIState, [], [], Pick<UIState, "barsPinned" | "mobileToolsHidden">>(
+    set => ({
+      terminalType: "none",
+      setTerminalType: type => set({ terminalType: type }),
 
-  sidebarView: null,
-  setSidebarView: view => set({ sidebarView: view }),
-  topBarView: null,
-  setTopBarView: view => set({ topBarView: view }),
+      sidebarView: null,
+      setSidebarView: view => set({ sidebarView: view }),
+      topBarView: null,
+      setTopBarView: view => set({ topBarView: view }),
 
-  disableVideoFocusTrap: false,
-  setDisableVideoFocusTrap: enabled => set({ disableVideoFocusTrap: enabled }),
-  isOcrMode: false,
-  setOcrMode: enabled => set({ isOcrMode: enabled }),
-  isAnimationComplete: false,
-  setIsAnimationComplete: enabled => set({ isAnimationComplete: enabled }),
+      disableVideoFocusTrap: false,
+      setDisableVideoFocusTrap: enabled => set({ disableVideoFocusTrap: enabled }),
+      isOcrMode: false,
+      setOcrMode: enabled => set({ isOcrMode: enabled }),
+      isAnimationComplete: false,
+      setIsAnimationComplete: enabled => set({ isAnimationComplete: enabled }),
 
-  isWakeOnLanModalVisible: false,
-  setWakeOnLanModalVisibility: enabled => set({ isWakeOnLanModalVisible: enabled }),
+      isWakeOnLanModalVisible: false,
+      setWakeOnLanModalVisibility: enabled => set({ isWakeOnLanModalVisible: enabled }),
 
-  toggleSidebarView: view =>
-    set(state => {
-      if (state.sidebarView === view) {
-        return { sidebarView: null , topBarView: null };
-      } else {
-        return { sidebarView: view , topBarView: null };
-      }
+      toggleSidebarView: view =>
+        set(state => {
+          if (state.sidebarView === view) {
+            return { sidebarView: null, topBarView: null };
+          } else {
+            return { sidebarView: view, topBarView: null };
+          }
+        }),
+      toggleTopBarView: view =>
+        set(state => {
+          if (state.topBarView === view) {
+            return { topBarView: null, sidebarView: null };
+          } else {
+            return { topBarView: view, sidebarView: null };
+          }
+        }),
+      otherSession: false,
+      setOtherSession: enabled => set({ otherSession: enabled }),
+
+      isAttachedVirtualKeyboardVisible: true,
+      setAttachedVirtualKeyboardVisibility: enabled =>
+        set({ isAttachedVirtualKeyboardVisible: enabled }),
+
+      barsPinned: false,
+      setBarsPinned: pinned => set({ barsPinned: pinned }),
+      barsTemporarilyVisible: false,
+      setBarsTemporarilyVisible: visible => set({ barsTemporarilyVisible: visible }),
+
+      mobileToolsHidden: false,
+      setMobileToolsHidden: hidden => set({ mobileToolsHidden: hidden }),
     }),
-  toggleTopBarView: view =>
-    set(state => {
-
-      if (state.topBarView === view) {
-        return { topBarView: null,sidebarView: null };
-      } else {
-        return { topBarView: view ,sidebarView: null };
-      }
-    }),
-    otherSession:false,
-    setOtherSession: enabled => set({ otherSession: enabled }),
-
-  isAttachedVirtualKeyboardVisible: true,
-  setAttachedVirtualKeyboardVisibility: enabled =>
-    set({ isAttachedVirtualKeyboardVisible: enabled }),
-}),
-
-
+    {
+      name: "ui-bars",
+      storage: createJSONStorage(() => localStorage),
+      // Only explicit choices survive a reload; the transient reveal does not.
+      partialize: state => ({ barsPinned: state.barsPinned, mobileToolsHidden: state.mobileToolsHidden }),
+    },
+  ),
 );
 
 interface RTCState {

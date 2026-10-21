@@ -92,6 +92,7 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
   const pasteCaptureRef = useRef<HTMLTextAreaElement>(null);
   const isReinitializingGadget = useHidStore(state => state.isReinitializingGadget);
   const isOcrMode = useUiStore(state => state.isOcrMode);
+  const mobileToolsHidden = useUiStore(state => state.mobileToolsHidden);
   const macrosSideTitle = useMacrosSideTitleState(state => state.sideTitle);
 
   const videoEffects = useVideoEffects();
@@ -524,7 +525,12 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
                     className="pointer-events-none absolute inset-0"
                     onPointerMove={handlePointerMove}
                   >
-                    <div className="pointer-events-auto absolute right-3 top-3 grid grid-cols-[auto_auto_auto] grid-rows-2 gap-1.5">
+                    <div
+                      className={cx(
+                        "pointer-events-auto absolute right-3 top-3 grid grid-cols-[auto_auto_auto] grid-rows-2 gap-1.5 transition-all duration-300",
+                        mobileToolsHidden && "pointer-events-none translate-x-4 opacity-0",
+                      )}
+                    >
                       <div
                         className={cx(
                           "flex h-8 w-8 items-center justify-center rounded-full text-white",

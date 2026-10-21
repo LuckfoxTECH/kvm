@@ -42,9 +42,11 @@ import {
   PeerConnectionDisconnectedOverlay,
 } from "@components/VideoOverlay";
 import { FeatureFlagProvider } from "@/providers/FeatureFlagProvider";
+import { DEVICE_API } from "@/ui.config";
 import notifications from "@/notifications";
 import BarTop from "@/layout/core/bar_top/index";
 import BottomBar from "@/layout/core/bar_bottom/index";
+import { BarsHiddenHandle, BarsHotZones, useBarsAutoHide } from "@/layout/core/bar_autohide";
 import { LocalVersionInfo } from "@/layout/components_setting/version/VersionContent";
 import Desktop from "@/layout/core/desktop/index";
 import { dark_bg_style_fun } from "@/layout/theme_color";
@@ -125,10 +127,83 @@ export default function MobileHome() {
 
 
   const [loadingMessage, setLoadingMessage] = useState("Connecting to device...");
+
+  // The loading text is driven by a monotonic stage so that a late event from an
+  // earlier step cannot walk the overlay back. Without this the UI used to freeze on
+  // "ICE Gathering completed" even though the connection had already failed.
+  const loadingStage = useRef(0);
+  const setLoadingStage = useCallback((stage: number, message: string) => {
+    if (stage < loadingStage.current) return;
+    loadingStage.current = stage;
+    setLoadingMessage(message);
+  }, []);
+
+  // True while the signaling socket is open. An offer can only reach the device over
+  // that socket, so a peer connection created without it would gather ICE and then
+  // wait forever for an answer that was never sent.
+  const signalingReady = useRef(false);
+  // Only the newest attempt may drive the UI or apply a remote answer.
+  const peerConnectionAttempt = useRef(0);
+  // The live peer connection. Superseded attempts are detached and closed explicitly,
+  // so their callbacks cannot overwrite the state of the current attempt.
+  const activePeerConnection = useRef<RTCPeerConnection | null>(null);
+  // Watchdog for "the device never answers": the overlay must never spin forever.
+  const connectWatchdog = useRef<number | null>(null);
+
+  const clearConnectWatchdog = useCallback(() => {
+    if (connectWatchdog.current !== null) {
+      window.clearTimeout(connectWatchdog.current);
+      connectWatchdog.current = null;
+    }
+  }, []);
+
+  const discardPeerConnection = useCallback(() => {
+    const stale = activePeerConnection.current;
+    activePeerConnection.current = null;
+    if (!stale) return;
+    stale.onconnectionstatechange = null;
+    stale.onnegotiationneeded = null;
+    stale.onicecandidate = null;
+    stale.onicegatheringstatechange = null;
+    stale.ontrack = null;
+    try {
+      stale.close();
+    } catch (e) {
+      console.error("[peerConnection] Failed to close the old peer connection", e);
+    }
+  }, []);
+
+  // Local sessions are kept in device memory only, so a reboot logs every client out
+  // and the signaling socket handshake is refused with 401. A browser cannot read the
+  // status of a failed WebSocket handshake, so probe the session over HTTP and go back
+  // to the login page when it is gone. The full page load also tears down all stale
+  // WebRTC/socket state.
+  const authProbeInFlight = useRef(false);
+  const lastAuthProbeAt = useRef(0);
+  const redirectToLoginIfSessionExpired = useCallback(async () => {
+    if (authProbeInFlight.current) return;
+    if (Date.now() - lastAuthProbeAt.current < 2000) return;
+    authProbeInFlight.current = true;
+    lastAuthProbeAt.current = Date.now();
+    try {
+      const res = await api.GET(`${DEVICE_API}/device`);
+      if (res.status === 401) {
+        console.warn("[auth] Local session expired, redirecting to the login page");
+        window.location.replace("/login-local");
+      }
+    } catch (e) {
+      // Device still unreachable: keep retrying instead of bouncing to the login page.
+      console.log("[auth] Session probe failed, device not reachable yet", e);
+    } finally {
+      authProbeInFlight.current = false;
+    }
+  }, []);
+
   const cleanupAndStopReconnecting = useCallback(
     function cleanupAndStopReconnecting() {
       console.log("Closing peer connection");
 
+      clearConnectWatchdog();
       setConnectionFailed(true);
       if (peerConnection) {
         setPeerConnectionState(peerConnection.connectionState);
@@ -138,7 +213,7 @@ export default function MobileHome() {
       peerConnection?.close();
       signalingAttempts.current = 0;
     },
-    [peerConnection, setPeerConnectionState],
+    [clearConnectWatchdog, peerConnection, setPeerConnectionState],
   );
 
   // We need to track connectionFailed in a ref to avoid stale closure issues
@@ -166,12 +241,19 @@ export default function MobileHome() {
         return;
       }
 
-      setLoadingMessage("Setting remote description");
+      // An answer for a connection that has already been replaced is useless and must
+      // not drive the overlay of the current attempt.
+      if (activePeerConnection.current !== pc) {
+        console.log("[setRemoteSessionDescription] Ignoring answer for a stale connection");
+        return;
+      }
+
+      setLoadingStage(5, "Setting remote description");
 
       try {
         await pc.setRemoteDescription(new RTCSessionDescription(remoteDescription));
         console.log("[setRemoteSessionDescription] Remote description set successfully");
-        setLoadingMessage("Establishing secure connection...");
+        setLoadingStage(6, "Establishing secure connection...");
       } catch (error) {
         console.error(
           "[setRemoteSessionDescription] Failed to set remote description:",
@@ -184,13 +266,19 @@ export default function MobileHome() {
       // Replace the interval-based check with a more reliable approach
       let attempts = 0;
       const checkInterval = setInterval(() => {
+        // A newer attempt has taken over (signaling reconnect or "Try again" click).
+        if (activePeerConnection.current !== pc) {
+          clearInterval(checkInterval);
+          return;
+        }
         attempts++;
 
         // When vivaldi has disabled "Broadcast IP for Best WebRTC Performance", this never connects
         if (pc.sctp?.state === "connected") {
           console.log("[setRemoteSessionDescription] Remote description set");
           clearInterval(checkInterval);
-          setLoadingMessage("Connection established");
+          clearConnectWatchdog();
+          setLoadingStage(7, "Connection established");
         } else if (attempts >= 10) {
           console.log(
             "[setRemoteSessionDescription] Failed to establish connection after 10 attempts",
@@ -209,7 +297,7 @@ export default function MobileHome() {
         }
       }, 1000);
     },
-    [cleanupAndStopReconnecting],
+    [cleanupAndStopReconnecting, clearConnectWatchdog, setLoadingStage],
   );
 
   const ignoreOffer = useRef(false);
@@ -229,6 +317,8 @@ export default function MobileHome() {
       onReconnectStop: () => {
         console.log("Reconnect stopped");
         cleanupAndStopReconnecting();
+        // The device may be back while the session it restarted from is gone.
+        void redirectToLoginIfSessionExpired();
       },
 
       shouldReconnect(event) {
@@ -240,6 +330,9 @@ export default function MobileHome() {
       onClose(event) {
         console.log("[Websocket] onClose", event);
         // We don't want to close everything down, we wait for the reconnect to stop instead
+        signalingReady.current = false;
+        // A 401 handshake rejection looks like a plain close here, so ask over HTTP.
+        void redirectToLoginIfSessionExpired();
       },
 
       onError(event) {
@@ -248,6 +341,7 @@ export default function MobileHome() {
       },
       onOpen() {
         console.log("[Websocket] onOpen");
+        signalingReady.current = true;
       },
 
       onMessage: message => {
@@ -333,9 +427,16 @@ export default function MobileHome() {
     (type: string, data: unknown) => {
       // Second argument tells the library not to queue the message, and send it once the connection is established again.
       // We have event handlers that handle the connection set up, so we don't need to queue the message.
+      // Dropping the signal silently used to leave the UI waiting for an answer that was never sent.
+      const socket = getWebSocket();
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        console.warn(`[Websocket] Dropping "${type}" signal, signaling channel is not open`);
+        return false;
+      }
       sendMessage(JSON.stringify({ type, data }), false);
+      return true;
     },
-    [sendMessage],
+    [getWebSocket, sendMessage],
   );
 
   const setupPeerConnection = useCallback(async () => {
@@ -344,14 +445,37 @@ export default function MobileHome() {
       return;
     }
 
+    const attempt = ++peerConnectionAttempt.current;
+
+    // An offer can only reach the device over the signaling socket. Without it a new
+    // peer connection would just gather candidates and then sit on "ICE Gathering
+    // completed" forever, so wait for the socket instead: every newly opened socket
+    // answers with `device-metadata`, which calls this function again.
+    if (!isLegacySignalingEnabled.current && !signalingReady.current) {
+      console.log("[setupPeerConnection] Signaling channel is closed, waiting for it");
+      clearConnectWatchdog();
+      discardPeerConnection();
+      setPeerConnection(null);
+      setConnectionFailed(false);
+      setPeerConnectionState("connecting");
+      loadingStage.current = 0;
+      setLoadingStage(1, "Waiting for the device to reconnect...");
+      return;
+    }
+
     console.log("[setupPeerConnection] Setting up peer connection");
+    // Never let two peer connections exist at the same time: the stale one would keep
+    // overwriting the loading message and swallow the answer of the current attempt.
+    discardPeerConnection();
+    setPeerConnection(null);
     setConnectionFailed(false);
-    setLoadingMessage("Connecting to device...");
+    loadingStage.current = 0;
+    setLoadingStage(0, "Connecting to device...");
 
     let pc: RTCPeerConnection;
     try {
       console.log("[setupPeerConnection] Creating peer connection");
-      setLoadingMessage("Creating peer connection...");
+      setLoadingStage(1, "Creating peer connection...");
       let fetchedIceServers: RTCIceServer[] = [];
       if (!iceConfig?.iceServers) {
         try {
@@ -376,7 +500,7 @@ export default function MobileHome() {
 
       setPeerConnectionState(pc.connectionState);
       console.log("[setupPeerConnection] Peer connection created", pc);
-      setLoadingMessage("Setting up connection to device...");
+      setLoadingStage(2, "Setting up connection to device...");
     } catch (e) {
       console.error(`[setupPeerConnection] Error creating peer connection: ${e}`);
       setTimeout(() => {
@@ -385,9 +509,37 @@ export default function MobileHome() {
       return;
     }
 
+    // A newer attempt started while we were awaiting the ICE servers: drop this one
+    // instead of registering it, otherwise it would silently take over the UI and
+    // strand the newer attempt without a watchdog.
+    if (peerConnectionAttempt.current !== attempt) {
+      console.log("[setupPeerConnection] Superseded by a newer attempt, discarding");
+      try {
+        pc.close();
+      } catch (e) {
+        console.error("[setupPeerConnection] Failed to close the abandoned connection", e);
+      }
+      return;
+    }
+
+    activePeerConnection.current = pc;
+
+    // Never leave the overlay spinning: if the device does not answer in time, fall
+    // back to the explicit "Connection Error" state where the user can click retry.
+    clearConnectWatchdog();
+    connectWatchdog.current = window.setTimeout(() => {
+      if (activePeerConnection.current !== pc) return;
+      if (pc.connectionState === "connected") return;
+      console.warn("[setupPeerConnection] Timed out waiting for the device, giving up");
+      cleanupAndStopReconnecting();
+    }, 20000);
+
     // Set up event listeners and data channels
     pc.onconnectionstatechange = () => {
+      // A newer attempt owns the UI now.
+      if (peerConnectionAttempt.current !== attempt) return;
       console.log("[setupPeerConnection] Connection state changed", pc.connectionState);
+      if (pc.connectionState === "connected") clearConnectWatchdog();
       setPeerConnectionState(pc.connectionState);
     };
 
@@ -398,6 +550,8 @@ export default function MobileHome() {
 
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
+        // Another attempt took over while we were awaiting, do not publish this offer.
+        if (peerConnectionAttempt.current !== attempt) return;
         const sd = btoa(JSON.stringify(pc.localDescription));
         const isNewSignalingEnabled = isLegacySignalingEnabled.current === false;
         if (isNewSignalingEnabled) {
@@ -419,18 +573,19 @@ export default function MobileHome() {
     pc.onicecandidate = async ({ candidate }) => {
       if (!candidate) return;
       if (candidate.candidate === "") return;
+      if (activePeerConnection.current !== pc) return;
       sendWebRTCSignal("new-ice-candidate", candidate);
     };
 
     pc.onicegatheringstatechange = event => {
       const pc = event.currentTarget as RTCPeerConnection;
+      if (activePeerConnection.current !== pc) return;
       if (pc.iceGatheringState === "complete") {
         console.log("ICE Gathering completed");
-        setLoadingMessage("ICE Gathering completed");
-
+        setLoadingStage(4, "ICE Gathering completed");
       } else if (pc.iceGatheringState === "gathering") {
         console.log("ICE Gathering Started");
-        setLoadingMessage("Gathering ICE candidates...");
+        setLoadingStage(3, "Gathering ICE candidates...");
       }
     };
 
@@ -455,6 +610,9 @@ export default function MobileHome() {
   }, [
     forceHttp,
     cleanupAndStopReconnecting,
+    clearConnectWatchdog,
+    discardPeerConnection,
+    setLoadingStage,
     iceConfig?.iceServers,
     sendWebRTCSignal,
     setDiskChannel,
@@ -480,9 +638,10 @@ export default function MobileHome() {
 
   useEffect(() => {
     return () => {
+      clearConnectWatchdog();
       peerConnection?.close();
     };
-  }, [peerConnection]);
+  }, [peerConnection, clearConnectWatchdog]);
 
   // For some reason, we have to have this unmount separate from the cleanup effect above
   useEffect(() => {
@@ -788,6 +947,7 @@ export default function MobileHome() {
 
 
 const {isDark} = useTheme();
+const { barsVisible, revealBars, scheduleHideBars } = useBarsAutoHide();
 
 const language = useSettingsStore(state => state.language);
 const { setCurrentLang } = useReactAt();
@@ -849,12 +1009,30 @@ useEffect(() => {
           </div>
         </FocusTrap>
 
+        <BarsHotZones
+          barsVisible={barsVisible}
+          revealBars={revealBars}
+          scheduleHideBars={scheduleHideBars}
+        />
+        <BarsHiddenHandle visible={!barsVisible} revealBars={revealBars} />
         <div className={`grid h-full grid-rows-(--grid-headerBody) select-none ${dark_bg_style_fun(isDark)}`}>
 
-          <BarTop requestFullscreen={handleRequestFullscreen} />
+          <div
+            onPointerDown={revealBars}
+            className={`transition-[max-height,opacity] duration-300 ease-out ${
+              barsVisible
+                ? "max-h-[96px] overflow-visible opacity-100"
+                : "max-h-0 overflow-hidden opacity-0 pointer-events-none"
+            }`}
+          >
+            <BarTop requestFullscreen={handleRequestFullscreen} />
+          </div>
 
 
-          <div className="relative flex h-full w-full overflow-hidden">
+          <div
+            className="relative flex h-full w-full overflow-hidden"
+            onPointerDownCapture={scheduleHideBars}
+          >
             <Desktop isFullscreen={isFullscreen} />
             <div
               style={{ animationDuration: "500ms" }}
@@ -868,7 +1046,16 @@ useEffect(() => {
 
             {isDesktop&&<SidebarContainer sidebarView={sidebarView} />}
           </div>
-           {  sidebarView !== "Macros" &&   sidebarView !== "TerminalTabsMobile" &&   sidebarView !== "PowerControl"&&    <BottomBar />}
+           <div
+             onPointerDown={revealBars}
+             className={`transition-[max-height,opacity] duration-300 ease-out ${
+               barsVisible
+                 ? "max-h-[128px] overflow-visible opacity-100"
+                 : "max-h-0 overflow-hidden opacity-0 pointer-events-none"
+             }`}
+           >
+             { sidebarView !== "Macros" &&   sidebarView !== "TerminalTabsMobile" &&   sidebarView !== "PowerControl"&&    <BottomBar />}
+           </div>
 
         </div>
       </div>

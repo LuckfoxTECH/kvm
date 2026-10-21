@@ -27,6 +27,7 @@ export default function MacroTopBar() {
   const { $at } = useReactAt();
   const toggleTopBarView = useUiStore(state => state.toggleTopBarView);
   const sidebarView = useUiStore(state => state.sidebarView);
+  const topBarView = useUiStore(state => state.topBarView);
   const { isDark } = useTheme();
 
   useEffect(() => {
@@ -55,51 +56,57 @@ export default function MacroTopBar() {
   if (isMobile) {
     return (
       <div
-        className={`flex items-center h-full w-[100vw] ${dark_bg_style_fun(isDark)} ${macros.length == 0 ? "justify-end" : "justify-between"}  px-[5px]  `}
+        className={`flex h-full w-full items-center gap-1 overflow-hidden px-[5px] ${dark_bg_style_fun(isDark)}`}
       >
-        <AntdButton
-          type={"text"}
-          style={{ height: "80%", lineHeight: "80%" }}
-          icon={<div
-            className={sidebarView == "Macros" ? text_primary_color: dark_font_style}>
-            <MingLingSvg />
-          </div>}
-
+        <button
+          type="button"
+          className={`shrink-0 bg-transparent border-0 p-0 cursor-pointer ${
+            sidebarView == "Macros" ? text_primary_color : `text-black ${dark_font_style}`
+          }`}
           onClick={() => {
             // setDisableFocusTrap(false);
             setDisableFocusTrap(true);
             toggleSidebarView("Macros");
           }}
-        />
+        >
+          <MingLingSvg />
+        </button>
 
-        {macros.slice(0, 4).map(macro => (
+        <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+          {macros.slice(0, 4).map(macro => (
+            <SmartButton
+              key={macro.id}
+              maxWidth={110}
+              color="default"
+              variant="outlined"
+              text={macro.name}
+              style={{
+                backgroundColor: "transparent",
+                flex: "0 1 auto",
+                minWidth: 0,
+                maxHeight: "80%",
+                padding: "2px 6px",
+                fontSize: 12,
+              }}
+              onClick={() => executeMacro(macro.steps)}
+            />
+          ))}
 
-          <SmartButton
-            key={macro.id}
-            maxWidth={110}
-            onClick={() => executeMacro(macro.steps)}
-            style={{
-              background: "transparent",
-              whiteSpace: "nowrap",
-              width: "19%",
-              height: "80%", lineHeight: "80%"
-            }}
-            text={macro.name}
-          >
-
-          </SmartButton>
-
-        ))}
-
-        {macros.length > 4 && (
-          <AntdButton
-            icon={<DownSvg fontSize={18} className={dark_font_style} />}
-            style={{ height: "80%", lineHeight: "80%" }}
-            onClick={(e) => {
-              e.stopPropagation();
-              toggleTopBarView("MacroMoreList");
-            }}></AntdButton>
-        )}
+          {macros.length > 4 && (
+            <button
+              type="button"
+              className={`shrink-0 bg-transparent border-0 p-0 cursor-pointer ${
+                topBarView == "MacroMoreList" ? text_primary_color : dark_font_style
+              }`}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleTopBarView("MacroMoreList");
+              }}
+            >
+              <DownSvg fontSize={18} />
+            </button>
+          )}
+        </div>
       </div>
     );
   }
