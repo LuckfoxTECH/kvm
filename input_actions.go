@@ -3,6 +3,7 @@ package kvm
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 // This file is the single place where the HTTP surfaces (the local CLI API and
@@ -167,8 +168,10 @@ func parseCombo(keyNames []string) (modifier uint8, keys []uint8, err error) {
 
 // typeASCIIText types the text one character at a time. The whole string is
 // validated first, so a rejected character never leaves half of the text
-// already typed on the remote host.
-func typeASCIIText(text string) error {
+// already typed on the remote host. A non-zero delay is inserted between two
+// keystrokes because the remote USB HID stack drops keys when reports are sent
+// back to back.
+func typeASCIIText(text string, delay time.Duration) error {
 	runes := []rune(text)
 	if len(runes) > maxTypeTextLength {
 		return fmt.Errorf("text is longer than %d characters", maxTypeTextLength)
@@ -191,6 +194,9 @@ func typeASCIIText(text string) error {
 	for i := range codes {
 		if err := tapKeys(modifiers[i], []uint8{codes[i]}); err != nil {
 			return err
+		}
+		if delay > 0 && i < len(codes)-1 {
+			time.Sleep(delay)
 		}
 	}
 	return nil

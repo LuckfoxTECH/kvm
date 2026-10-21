@@ -383,6 +383,7 @@
   "81bafb2833": "The default SSH user is ",
   "7a941a0f87": "Update SSH Key",
   "d876ff8da6": "API Key",
+  "1d3bb6d0f9": "Enable MCP server",
   "9b9d026ed7": "MCP API key for authenticating MCP clients",
   "538ce1893b": "Enter API key or leave empty to auto-generate",
   "88bc5abdcb": "Used for authenticating MCP requests.",
@@ -684,5 +685,9 @@
   "65f1314580": "Confirm your password",
   "af21497286": "Set Password",
   "c3f88872d6": "This password will be used to secure your device data and protect against unauthorized access.",
-  "06a7b3bf6e": "All data remains on your local device."
+  "06a7b3bf6e": "All data remains on your local device.",
+  "8338be3157": "MCP server is listening on port 8081",
+  "99110ed059": "MCP server is disabled, port 8081 is closed",
+  "3b52296a33": "Used for authenticating MCP requests. The server cannot be enabled without a key.",
+  "62b4d53ce0": "Enabled, but not listening on port 8081"
 }

@@ -139,7 +139,8 @@ type Config struct {
 	NetbirdManagementURL       string                 `json:"netbird_management_url"`
 	NpuAppEnabled              bool                   `json:"npu_app_enabled"`
 	Firewall                   *FirewallConfig        `json:"firewall"`
-	APIKey                     string                 `json:"api_key"` // MCP-only API key, used by mcp.go
+	APIKey                     string                 `json:"api_key"`                // MCP-only API key, used by mcp.go
+	MCPDisabled                bool                   `json:"mcp_disabled,omitempty"` // MCP server off; the zero value keeps it enabled for existing configs
 	PersistedVirtualMediaState *VirtualMediaState     `json:"persisted_virtual_media_state,omitempty"`
 	SerialBaudRate             int                    `json:"serial_baud_rate,omitempty"`
 	SerialDataBits             int                    `json:"serial_data_bits,omitempty"`

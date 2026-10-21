@@ -8,6 +8,7 @@ import { SettingsPageHeader } from "@components/Settings/SettingsPageheader";
 import { TextAreaWithLabel } from "@components/TextArea";
 import { useSettingsStore, useHidStore } from "@/hooks/stores";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
+import api from "@/api";
 import { isOnDevice } from "@/main";
 import notifications from "@/notifications";
 import { SettingsItem } from "@components/Settings/SettingsView";
@@ -30,6 +31,8 @@ export default function SettingsAdvanced() {
   const [localLoopbackOnly, setLocalLoopbackOnly] = useState(false);
   const [apiKey, setApiKey] = useState<string>("");
   const [apiKeyInput, setApiKeyInput] = useState<string>("");
+  const [mcpServerEnabled, setMcpServerEnabled] = useState(true);
+  const [mcpListening, setMcpListening] = useState(false);
   const [devModeEnabled, setDevModeEnabled] = useState(false);
   const [showApiKeyClearWarning, setShowApiKeyClearWarning] = useState(false);
 
@@ -163,6 +166,46 @@ export default function SettingsAdvanced() {
       notifications.success("API key updated successfully");
     });
   }, [send, apiKeyInput]);
+
+  // MCP server state lives in the management API, not in the JSON-RPC surface
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .GET("/mcp/config")
+      .then(res => (res.ok ? res.json() : null))
+      .then(data => {
+        if (!cancelled && data) {
+          setMcpServerEnabled(Boolean(data.enabled));
+          setMcpListening(Boolean(data.listening));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleMcpServerToggle = useCallback((enabled: boolean) => {
+    api
+      .POST("/mcp/config", { enabled })
+      .then(async res => {
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          notifications.error(
+            `Failed to ${enabled ? "enable" : "disable"} MCP server: ${data?.error || "Unknown error"}`,
+          );
+          return;
+        }
+        setMcpServerEnabled(Boolean(data.enabled));
+        setMcpListening(Boolean(data.listening));
+        notifications.success(
+          enabled ? "MCP server enabled" : "MCP server disabled",
+        );
+      })
+      .catch(() =>
+        notifications.error("Failed to update MCP server state"),
+      );
+  }, []);
 
   const handleGenerateApiKey = useCallback(() => {
     send("generateApiKey", {}, resp => {
@@ -345,36 +388,58 @@ export default function SettingsAdvanced() {
         {isOnDevice && (
           <div className="space-y-4">
             <SettingsItem
-              title={$at("API Key")}
-              description={$at("MCP API key for authenticating MCP clients")}
-            />
-            <div className="space-y-4">
-              <TextAreaWithLabel
-                label={$at("API Key")}
-                value={apiKeyInput || ""}
-                rows={2}
-                onChange={e => setApiKeyInput(e.target.value)}
-                placeholder={$at("Enter API key or leave empty to auto-generate")}
+              title={$at("Enable MCP server")}
+              description={$at(
+                mcpServerEnabled
+                  ? mcpListening
+                    ? "MCP server is listening on port 8081"
+                    : "Enabled, but not listening on port 8081"
+                  : "MCP server is disabled, port 8081 is closed",
+              )}
+              noCol
+            >
+              <Checkbox
+                checked={mcpServerEnabled}
+                onChange={e => handleMcpServerToggle(e.target.checked)}
               />
-              <p className="text-xs text-slate-600 dark:text-[#ffffff]">
-                {$at("Used for authenticating MCP requests.")}
-              </p>
-              <div className="flex items-center gap-x-2">
-                <AntdButton
-                  type="primary"
-                  onClick={handleUpdateApiKey}
-                  className={isMobile?"w-full":""}
-                >
-                  {$at("Save API Key")}
-                </AntdButton>
-                <AntdButton
-                  onClick={handleGenerateApiKey}
-                  className={isMobile?"w-full":""}
-                >
-                  {$at("Generate New")}
-                </AntdButton>
-              </div>
-            </div>
+            </SettingsItem>
+            {mcpServerEnabled && (
+              <>
+                <SettingsItem
+                  title={$at("API Key")}
+                  description={$at("MCP API key for authenticating MCP clients")}
+                />
+                <div className="space-y-4">
+                  <TextAreaWithLabel
+                    label={$at("API Key")}
+                    value={apiKeyInput || ""}
+                    rows={2}
+                    onChange={e => setApiKeyInput(e.target.value)}
+                    placeholder={$at("Enter API key or leave empty to auto-generate")}
+                  />
+                  <p className="text-xs text-slate-600 dark:text-[#ffffff]">
+                    {$at(
+                      "Used for authenticating MCP requests. The server cannot be enabled without a key.",
+                    )}
+                  </p>
+                  <div className="flex items-center gap-x-2">
+                    <AntdButton
+                      type="primary"
+                      onClick={handleUpdateApiKey}
+                      className={isMobile?"w-full":""}
+                    >
+                      {$at("Save API Key")}
+                    </AntdButton>
+                    <AntdButton
+                      onClick={handleGenerateApiKey}
+                      className={isMobile?"w-full":""}
+                    >
+                      {$at("Generate New")}
+                    </AntdButton>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
 

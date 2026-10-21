@@ -1,6 +1,7 @@
 package kvm
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -54,28 +55,47 @@ func cliConnectionError(err error) error {
 }
 
 func apiPost(path string, body interface{}) error {
+	_, err := apiPostJSON(path, body)
+	return err
+}
+
+// apiPostJSON posts a command and decodes the JSON answer, for the endpoints
+// that return state instead of a bare acknowledgement.
+func apiPostJSON(path string, body interface{}) (map[string]interface{}, error) {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	
-	resp, err := cliHTTPClient.Post(apiBaseURL+path, "application/json", strings.NewReader(string(jsonBody)))
+
+	resp, err := cliHTTPClient.Post(apiBaseURL+path, "application/json", bytes.NewReader(jsonBody))
 	if err != nil {
-		return cliConnectionError(err)
+		return nil, cliConnectionError(err)
 	}
 	defer resp.Body.Close()
-	
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
 	if resp.StatusCode != 200 {
-		bodyBytes, _ := io.ReadAll(resp.Body)
 		var errResp map[string]interface{}
 		if json.Unmarshal(bodyBytes, &errResp) == nil {
 			if msg, ok := errResp["error"].(string); ok {
-				return fmt.Errorf("API error: %s", msg)
+				return nil, fmt.Errorf("API error: %s", msg)
 			}
 		}
-		return fmt.Errorf("API error: HTTP %d - %s", resp.StatusCode, string(bodyBytes))
+		return nil, fmt.Errorf("API error: HTTP %d - %s", resp.StatusCode, string(bodyBytes))
 	}
-	return nil
+
+	var result map[string]interface{}
+	if len(bodyBytes) == 0 {
+		return nil, nil
+	}
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func apiGetBytes(path string) ([]byte, error) {
@@ -119,7 +139,7 @@ Usage:
   kvm_app cli <command>     Run CLI commands for HID control
 
 Commands:
-  cli    HID control via unix socket (mouse, keyboard, capture, status, signer)
+  cli    HID control via unix socket (mouse, keyboard, capture, status, signer, mcp)
 
 Examples:
   kvm_app cli mouse move 100 200
@@ -127,6 +147,8 @@ Examples:
   kvm_app cli keyboard type "Hello World"
   kvm_app cli capture
   kvm_app cli status
+  kvm_app cli mcp status
+  kvm_app cli mcp regenerate
   kvm_app cli signer keygen
   kvm_app cli signer sign --key ota_ed25519.key firmware.bin
   kvm_app cli signer verify --pubkey ota_ed25519.pub firmware.bin
@@ -144,8 +166,17 @@ var mouseCmd = &cobra.Command{
 
 var mouseMoveCmd = &cobra.Command{
 	Use:   "move [x] [y]",
-	Short: "Move mouse to position",
-	Args:  cobra.ExactArgs(2),
+	Short: "Move mouse to a pixel position",
+	Long: `Move the mouse.
+
+Without --relative, x and y are pixels of the current video input, the same unit
+the MCP mouse_move tool takes; values outside the screen are clamped and the
+coordinate is scaled to HID logical units internally.
+
+With --relative, x and y are HID steps instead: one signed 8-bit report, clamped
+to -127..127. A pixel offset is meaningless there because the target applies its
+own pointer acceleration.`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		x, err := strconv.Atoi(args[0])
 		if err != nil {
@@ -158,13 +189,24 @@ var mouseMoveCmd = &cobra.Command{
 
 		relative, _ := cmd.Flags().GetBool("relative")
 		if relative {
-			return apiPost("/mouse/relative", map[string]interface{}{
+			resp, err := apiPostJSON("/mouse/relative", map[string]interface{}{
 				"dx": x, "dy": y,
 			})
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Mouse moved by (%v, %v)\n", resp["dx"], resp["dy"])
+			return nil
 		}
-		return apiPost("/mouse/absolute", map[string]interface{}{
+
+		resp, err := apiPostJSON("/mouse/absolute", map[string]interface{}{
 			"x": x, "y": y,
 		})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Mouse moved to pixel (%v, %v)\n", resp["x"], resp["y"])
+		return nil
 	},
 }
 
@@ -247,32 +289,64 @@ var keyboardComboCmd = &cobra.Command{
 var keyboardTypeCmd = &cobra.Command{
 	Use:   "type [text]",
 	Short: "Type a text string",
-	Args:  cobra.ExactArgs(1),
+	Long: `Type an ASCII text string into the remote host.
+
+A short delay is inserted between two keystrokes because the remote USB HID
+stack drops keys when reports are sent back to back. --delay overrides it,
+0 types as fast as the stack accepts.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return apiPost("/keyboard/type", map[string]interface{}{
-			"text": args[0],
-		})
+		payload := map[string]interface{}{"text": args[0]}
+		if cmd.Flags().Changed("delay") {
+			delay, _ := cmd.Flags().GetInt("delay")
+			payload["delayMs"] = delay
+		}
+		resp, err := apiPostJSON("/keyboard/type", payload)
+		if err != nil {
+			return err
+		}
+		// the server knows the final rhythm (it clamps the delay and applies the
+		// default), so report what actually happened rather than what was asked
+		if message, ok := resp["message"].(string); ok {
+			fmt.Println(message)
+		}
+		return nil
 	},
 }
 
 // === Capture Command ===
 
-var captureScreenshotPath = "/userdata/picokvm/screenshot/kvm_screenshot.jpg"
+var captureOutputPath string
 
 var captureCmd = &cobra.Command{
 	Use:   "capture",
 	Short: "Capture a JPEG screenshot",
-	Long:  "Capture screenshot using hardware JPEG encoder and save to fixed path",
+	Long: "Capture screenshot using hardware JPEG encoder and save it to a timestamped file.\n" +
+		"Use --output to pick the path, or --output - to write the JPEG to stdout.",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		data, err := apiGetBytes("/capture")
 		if err != nil {
 			return err
 		}
 
-		if err := os.WriteFile(captureScreenshotPath, data, 0644); err != nil {
-			return fmt.Errorf("failed to write: %w", err)
+		if captureOutputPath == "-" {
+			if _, err := os.Stdout.Write(data); err != nil {
+				return fmt.Errorf("failed to write to stdout: %w", err)
+			}
+			return nil
 		}
-		fmt.Printf("Screenshot saved to %s (%d bytes)\n", captureScreenshotPath, len(data))
+
+		path := captureOutputPath
+		if path == "" {
+			path, err = persistSnapshot(data)
+			if err != nil {
+				return err
+			}
+		} else if err := os.WriteFile(path, data, 0o644); err != nil {
+			return fmt.Errorf("failed to write %s: %w", path, err)
+		}
+
+		fmt.Printf("Screenshot saved to %s (%d bytes)\n", path, len(data))
 		return nil
 	},
 }
@@ -287,7 +361,7 @@ var statusCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		
+
 		fmt.Printf("Video State:\n")
 		fmt.Printf("  Ready:  %v\n", resp["ready"])
 		fmt.Printf("  Error:  %s\n", resp["error"])
@@ -310,24 +384,24 @@ var keyNameToCode = map[string]uint8{
 	"1": 0x1E, "2": 0x1F, "3": 0x20, "4": 0x21,
 	"5": 0x22, "6": 0x23, "7": 0x24, "8": 0x25,
 	"9": 0x26, "0": 0x27,
-	"Enter":       0x28,
-	"Escape":      0x29,
-	"Backspace":   0x2A,
-	"Tab":         0x2B,
-	"Space":       0x2C,
-	"Minus":       0x2D,
-	"Equal":       0x2E,
-	"LeftBrace":   0x2F,
-	"RightBrace":  0x30,
-	"Backslash":   0x31,
-	"Semicolon":   0x33,
-	"Quote":       0x34,
-	"Grave":       0x35,
-	"Comma":       0x36,
-	"Dot":         0x37,
-	"Slash":       0x38,
-	"CapsLock":    0x39,
-	"F1": 0x3A, "F2": 0x3B, "F3": 0x3C, "F4": 0x3D,
+	"Enter":      0x28,
+	"Escape":     0x29,
+	"Backspace":  0x2A,
+	"Tab":        0x2B,
+	"Space":      0x2C,
+	"Minus":      0x2D,
+	"Equal":      0x2E,
+	"LeftBrace":  0x2F,
+	"RightBrace": 0x30,
+	"Backslash":  0x31,
+	"Semicolon":  0x33,
+	"Quote":      0x34,
+	"Grave":      0x35,
+	"Comma":      0x36,
+	"Dot":        0x37,
+	"Slash":      0x38,
+	"CapsLock":   0x39,
+	"F1":         0x3A, "F2": 0x3B, "F3": 0x3C, "F4": 0x3D,
 	"F5": 0x3E, "F6": 0x3F, "F7": 0x40, "F8": 0x41,
 	"F9": 0x42, "F10": 0x43, "F11": 0x44, "F12": 0x45,
 	"PrintScreen": 0x46,
@@ -543,6 +617,98 @@ var signerVerifyCmd = &cobra.Command{
 	},
 }
 
+// === MCP Commands ===
+
+var mcpCmd = &cobra.Command{
+	Use:   "mcp",
+	Short: "Inspect and manage the MCP server",
+	Long: `Inspect and manage the MCP server over the local socket.
+
+These commands exist so the MCP endpoint can be inspected, disabled or have its
+key rotated when the Web UI is unreachable. The same operations are available in
+the Web UI; the socket permissions (0600, root) are the access control here.`,
+}
+
+var mcpStatusCmd = &cobra.Command{
+	Use:   "status",
+	Short: "Show MCP server state",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		resp, err := apiGetJSON("/mcp/config")
+		if err != nil {
+			return err
+		}
+
+		enabled, _ := resp["enabled"].(bool)
+		listening, _ := resp["listening"].(bool)
+		keySet, _ := resp["apiKeySet"].(bool)
+		port := 0
+		if v, ok := resp["port"].(float64); ok {
+			port = int(v)
+		}
+
+		fmt.Printf("MCP Server:\n")
+		fmt.Printf("  Enabled:   %v\n", enabled)
+		fmt.Printf("  Listening: %v (port %d)\n", listening, port)
+		if keySet {
+			masked, _ := resp["apiKey"].(string)
+			fmt.Printf("  API Key: %s (masked)\n", masked)
+		} else {
+			fmt.Printf("  API Key: not set, every request is refused\n")
+		}
+		return nil
+	},
+}
+
+var mcpEnableCmd = &cobra.Command{
+	Use:   "enable",
+	Short: "Start accepting MCP connections",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return setMCPEnabled(true)
+	},
+}
+
+var mcpDisableCmd = &cobra.Command{
+	Use:   "disable",
+	Short: "Refuse MCP connections and close the listener",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return setMCPEnabled(false)
+	},
+}
+
+var mcpRegenerateCmd = &cobra.Command{
+	Use:   "regenerate",
+	Short: "Rotate the MCP API key and print the new one",
+	Long: `Rotate the MCP API key.
+
+The new key is printed once. Every connected MCP client has to be updated, the
+old key stops working immediately.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		resp, err := apiPostJSON("/mcp/key/regenerate", map[string]interface{}{})
+		if err != nil {
+			return err
+		}
+
+		key, _ := resp["apiKey"].(string)
+		fmt.Printf("New MCP API key: %s\n", key)
+		fmt.Printf("Clients using the old key are refused from now on.\n")
+		return nil
+	},
+}
+
+func setMCPEnabled(enabled bool) error {
+	resp, err := apiPostJSON("/mcp/config", map[string]interface{}{"enabled": enabled})
+	if err != nil {
+		return err
+	}
+
+	state, _ := resp["enabled"].(bool)
+	if state == enabled {
+		fmt.Printf("MCP server %s\n", map[bool]string{true: "enabled", false: "disabled"}[enabled])
+		return nil
+	}
+	return fmt.Errorf("API reported enabled=%v after asking for %v", state, enabled)
+}
+
 func init() {
 	mouseMoveCmd.Flags().Bool("relative", false, "Use relative positioning")
 	mouseCmd.AddCommand(mouseMoveCmd)
@@ -555,9 +721,11 @@ func init() {
 	keyboardCmd.AddCommand(keyboardKeyCmd)
 	keyboardCmd.AddCommand(keyboardComboCmd)
 	keyboardCmd.AddCommand(keyboardTypeCmd)
+	keyboardTypeCmd.Flags().Int("delay", 30, "Delay between two keystrokes in ms, 0..1000")
 	cliRootCmd.AddCommand(keyboardCmd)
 
 	cliRootCmd.AddCommand(captureCmd)
+	captureCmd.Flags().StringVarP(&captureOutputPath, "output", "o", "", "Output path for the JPEG (default: timestamped file in the screenshot directory, - for stdout)")
 
 	signerKeygenCmd.Flags().String("output-dir", ".", "Directory for key output")
 	signerCmd.AddCommand(signerKeygenCmd)
@@ -568,4 +736,10 @@ func init() {
 	cliRootCmd.AddCommand(signerCmd)
 
 	cliRootCmd.AddCommand(statusCmd)
+
+	mcpCmd.AddCommand(mcpStatusCmd)
+	mcpCmd.AddCommand(mcpEnableCmd)
+	mcpCmd.AddCommand(mcpDisableCmd)
+	mcpCmd.AddCommand(mcpRegenerateCmd)
+	cliRootCmd.AddCommand(mcpCmd)
 }

@@ -17,6 +17,7 @@ import (
 	"github.com/pion/webrtc/v4"
 	"go.bug.st/serial"
 
+	"kvm/internal/mcp"
 	"kvm/internal/usbgadget"
 )
 
@@ -95,6 +96,24 @@ func writeJSONRPCEvent(event string, params interface{}, session *Session) {
 }
 
 func DispatchRPCRequest(request JSONRPCRequest) (JSONRPCResponse, error) {
+	// A keyboard report from the Web UI is one writer among several: without the
+	// input lease it could land in the middle of a string typed by an MCP tool
+	// and scramble the text on the remote host.
+	if request.Method == "keyboardReport" {
+		release, err := mcp.AcquireInput(mcp.OwnerWeb, mcp.DefaultInputHold)
+		if err != nil {
+			return JSONRPCResponse{
+				JSONRPC: "2.0",
+				Error: map[string]interface{}{
+					"code":    -32000,
+					"message": err.Error(),
+				},
+				ID: request.ID,
+			}, nil
+		}
+		defer release()
+	}
+
 	handler, ok := rpcHandlers[request.Method]
 	if !ok {
 		return JSONRPCResponse{
@@ -1548,6 +1567,8 @@ func rpcSetApiKey(apiKey string) error {
 	if err := SaveConfig(); err != nil {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
+	// publish to the running MCP server, otherwise the new key only works after a restart
+	mcp.ApplyAPIKey(apiKey)
 	return nil
 }
 
@@ -1560,6 +1581,7 @@ func rpcGenerateApiKey() (string, error) {
 	if err := SaveConfig(); err != nil {
 		return "", fmt.Errorf("failed to save config: %w", err)
 	}
+	mcp.ApplyAPIKey(key)
 	return key, nil
 }
 
@@ -1770,8 +1792,6 @@ func rpcConfirmOtherSession() (bool, error) {
 	return true, nil
 }
 
-const jpegScreenshotPath = "/userdata/picokvm/screenshot/kvm_screenshot.jpg"
-
 // StartJpegCapture starts continuous JPEG capture mode.
 func StartJpegCapture() error {
 	_, err := CallCtrlAction("jpeg_capture_start", nil)
@@ -1880,7 +1900,7 @@ func stopSnapshotStream() {
 }
 
 func readSnapshotFile() ([]byte, error) {
-	data, err := os.ReadFile(jpegScreenshotPath)
+	data, err := os.ReadFile(snapshotSpoolPath)
 	if err != nil {
 		return nil, err
 	}
@@ -1892,7 +1912,7 @@ func readSnapshotFile() ([]byte, error) {
 
 // takeSnapshot triggers one JPEG capture and reads the encoded file.
 func takeSnapshot() ([]byte, error) {
-	os.Remove(jpegScreenshotPath)
+	os.Remove(snapshotSpoolPath)
 
 	// drain any stale signal before triggering
 	select {
@@ -1926,18 +1946,22 @@ func takeSnapshot() ([]byte, error) {
 		time.Sleep(snapshotPollInterval)
 	}
 
-	return nil, fmt.Errorf("JPEG file not found at %s", jpegScreenshotPath)
+	return nil, fmt.Errorf("JPEG file not found at %s", snapshotSpoolPath)
 }
 
 // captureScreenshot captures a JPEG screenshot using hardware encoder.
+// It is serialized: the native encoder owns a single spool file.
 func captureScreenshot(format string) ([]byte, error) {
 	if format != "jpeg" && format != "jpg" {
 		return nil, fmt.Errorf("only JPEG format is supported")
 	}
 
+	snapshotMu.Lock()
+	defer snapshotMu.Unlock()
+
 	logger.Info().Msg("triggering JPEG snapshot via jpeg_take_snapshot")
 
-	if err := os.MkdirAll("/userdata/picokvm/screenshot", 0o755); err != nil {
+	if err := os.MkdirAll(snapshotDir, 0o755); err != nil {
 		logger.Warn().Err(err).Msg("failed to create screenshot directory")
 	}
 
