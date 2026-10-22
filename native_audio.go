@@ -27,13 +27,12 @@ func CallAudioCtrlAction(action string, params map[string]interface{}) (*CtrlRes
 	defer audioLock.Unlock()
 	ctrlAction := CtrlAction{
 		Action: action,
-		Seq:    seq,
+		Seq:    nextSeq(),
 		Params: params,
 	}
 
-	responseChan := make(chan *CtrlResponse)
-	audioOngoingRequests[seq] = responseChan
-	seq++
+	responseChan := make(chan *CtrlResponse, 1)
+	audioOngoingRequests[ctrlAction.Seq] = responseChan
 
 	jsonData, err := json.Marshal(ctrlAction)
 	if err != nil {
@@ -55,7 +54,7 @@ func CallAudioCtrlAction(action string, params map[string]interface{}) (*CtrlRes
 
 	select {
 	case response := <-responseChan:
-		delete(audioOngoingRequests, seq)
+		delete(audioOngoingRequests, ctrlAction.Seq)
 		if response.Error != "" {
 			return nil, ErrorfL(
 				&scopedLogger,
@@ -65,15 +64,14 @@ func CallAudioCtrlAction(action string, params map[string]interface{}) (*CtrlRes
 		}
 		return response, nil
 	case <-time.After(5 * time.Second):
-		close(responseChan)
-		delete(audioOngoingRequests, seq)
+		delete(audioOngoingRequests, ctrlAction.Seq)
 		return nil, ErrorfL(&scopedLogger, "timeout waiting for response", nil)
 	}
 }
 
 func WriteAudioCtrlMessage(message []byte) error {
 	if audioSocketConn == nil {
-		return fmt.Errorf("audio socket not conn ected")
+		return fmt.Errorf("audio socket not connected")
 	}
 	_, err := audioSocketConn.Write(message)
 	return err

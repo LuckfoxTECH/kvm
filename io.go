@@ -5,8 +5,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+// ioControlMu serialises writes to the power / reset GPIO lines so the web UI
+// and the touchscreen cannot drive the same line at the same time.
+var ioControlMu sync.Mutex
 
 const (
 	gpioBasePath  = "/sys/class/gpio"
@@ -121,6 +126,9 @@ func setLedMode(ledConfigPath string, mode string) error {
 }
 
 func pulseGPIO(pin int, duration time.Duration) error {
+	ioControlMu.Lock()
+	defer ioControlMu.Unlock()
+
 	// First pull up
 	if err := setGPIOValue(pin, true); err != nil {
 		return err

@@ -28,6 +28,7 @@ import {
   useVideoStore,
   VideoState,
   useSettingsStore,
+  BacklightSettings,
  useVpnStore } from "@/hooks/stores";
 import { JsonRpcRequest, useJsonRpc, resetHttpSessionId } from "@/hooks/useJsonRpc";
 import { DEVICE_API } from "@/ui.config";
@@ -727,6 +728,25 @@ export default function PCHome() {
     if (resp.method === "networkState") {
       console.log("Setting network state", resp.params);
       setNetworkState(resp.params as NetworkState);
+    }
+
+    if (resp.method === "backlightChanged") {
+      // The touchscreen slider changed the brightness; mirror it here so an open
+      // settings page does not show a stale value.
+      useSettingsStore
+        .getState()
+        .setBacklightSettings({
+          ...useSettingsStore.getState().backlightSettings,
+          max_brightness: (resp.params as Pick<BacklightSettings, "max_brightness">)
+            .max_brightness,
+        });
+    }
+
+    if (resp.method === "displayState") {
+      // The panel was switched on/off, possibly by the touchscreen.
+      useSettingsStore
+        .getState()
+        .setDisplayOn((resp.params as { on: boolean }).on);
     }
 
     if (resp.method === "keyboardLedState") {

@@ -55,7 +55,6 @@ func Main() {
 		Interface("app_version", appVersionLocal).
 		Msg("starting KVM")
 
-	go watchAdcKeysLongPressReset(appCtx)
 	go runWatchdog()
 	go confirmCurrentSystem() //A/B system
 	if isNewEnoughSystem {

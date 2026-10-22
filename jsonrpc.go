@@ -597,6 +597,9 @@ func rpcSetUpdateDownloadProxy(proxy string) error {
 }
 
 func rpcSetDisplayRotation(params DisplayRotationSettings) error {
+	displaySettingsMu.Lock()
+	defer displaySettingsMu.Unlock()
+
 	var err error
 	_, err = lvDispSetRotation(params.Rotation)
 	if err == nil {
@@ -617,9 +620,11 @@ func rpcGetDisplayRotation() (*DisplayRotationSettings, error) {
 func rpcSetBacklightSettings(params BacklightSettings) error {
 	blConfig := params
 
-	// NOTE: by default, the frontend limits the brightness to 64, as that's what the device originally shipped with.
-	if blConfig.MaxBrightness > 255 || blConfig.MaxBrightness < 0 {
-		return fmt.Errorf("maxBrightness must be between 0 and 255")
+	// MaxBrightness is a percentage (10-100), the same unit the touchscreen slider uses.
+	// Values below 10 would look like the panel is off, the dedicated display off
+	// action is used for that instead.
+	if blConfig.MaxBrightness > 100 || blConfig.MaxBrightness < 10 {
+		return fmt.Errorf("maxBrightness must be between 10 and 100")
 	}
 
 	if blConfig.DimAfter < 0 {
@@ -630,7 +635,7 @@ func rpcSetBacklightSettings(params BacklightSettings) error {
 		return fmt.Errorf("offAfter must be a positive integer")
 	}
 
-	config.DisplayMaxBrightness = blConfig.MaxBrightness
+	config.DisplayBrightnessPercent = blConfig.MaxBrightness
 	config.DisplayDimAfterSec = blConfig.DimAfter
 	config.DisplayOffAfterSec = blConfig.OffAfter
 
@@ -638,7 +643,12 @@ func rpcSetBacklightSettings(params BacklightSettings) error {
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
-	logger.Info().Int("max_brightness", config.DisplayMaxBrightness).Int("dim_after", config.DisplayDimAfterSec).Int("off_after", config.DisplayOffAfterSec).Msg("rpc: display: settings applied")
+	// Keep the touchscreen backlight slider in sync with the web UI value.
+	displaySettingsMu.Lock()
+	pushBacklightToDisplay(config.DisplayBrightnessPercent)
+	displaySettingsMu.Unlock()
+
+	logger.Info().Int("max_brightness", config.DisplayBrightnessPercent).Int("dim_after", config.DisplayDimAfterSec).Int("off_after", config.DisplayOffAfterSec).Msg("rpc: display: settings applied")
 
 	// If the device started up with auto-dim and/or auto-off set to zero, the display init
 	// method will not have started the tickers. So in case that has changed, attempt to start the tickers now.
@@ -654,10 +664,28 @@ func rpcSetBacklightSettings(params BacklightSettings) error {
 
 func rpcGetBacklightSettings() (*BacklightSettings, error) {
 	return &BacklightSettings{
-		MaxBrightness: config.DisplayMaxBrightness,
+		MaxBrightness: config.DisplayBrightnessPercent,
 		DimAfter:      int(config.DisplayDimAfterSec),
 		OffAfter:      int(config.DisplayOffAfterSec),
 	}, nil
+}
+
+// DisplayState is the payload returned by rpcToggleDisplay.
+type DisplayState struct {
+	On bool `json:"on"`
+}
+
+// rpcToggleDisplay switches the panel between dark and the configured
+// brightness, backing the one click display off button in the web UI.
+func rpcToggleDisplay() (*DisplayState, error) {
+	on := toggleDisplayPower()
+
+	return &DisplayState{On: on}, nil
+}
+
+// rpcGetDisplayState reports whether the panel is currently lit.
+func rpcGetDisplayState() (*DisplayState, error) {
+	return &DisplayState{On: backlightState != 2}, nil
 }
 
 func rpcSetTimeZone(timeZone string) error {
@@ -1602,6 +1630,8 @@ func rpcGetIOSettings() (IOSettings, error) {
 
 func rpcSetIOSettings(settings IOSettings) error {
 	LoadConfig()
+	ioControlMu.Lock()
+	defer ioControlMu.Unlock()
 	// IO0: GPIO58 IO1: GPIO59
 	_ = setGPIOValue(58, settings.IO0Status)
 	_ = setGPIOValue(59, settings.IO1Status)
@@ -1624,6 +1654,9 @@ func rpcSetIOStatus(ioName string, status bool) error {
 	} else {
 		return fmt.Errorf("unknown IO name: %s", ioName)
 	}
+
+	ioControlMu.Lock()
+	defer ioControlMu.Unlock()
 
 	if err := setGPIOValue(pin, status); err != nil {
 		return fmt.Errorf("failed to set GPIO value: %v", err)
@@ -2078,6 +2111,8 @@ var rpcHandlers = map[string]RPCHandler{
 	"getDisplayRotation":        {Func: rpcGetDisplayRotation},
 	"setBacklightSettings":      {Func: rpcSetBacklightSettings, Params: []string{"params"}},
 	"getBacklightSettings":      {Func: rpcGetBacklightSettings},
+	"toggleDisplay":            {Func: rpcToggleDisplay},
+	"getDisplayState":          {Func: rpcGetDisplayState},
 	"setTimeZone":               {Func: rpcSetTimeZone, Params: []string{"timeZone"}},
 	"getTimeZone":               {Func: rpcGetTimeZone},
 	"setLedGreenMode":           {Func: rpcSetLedGreenMode, Params: []string{"mode"}},

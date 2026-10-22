@@ -89,23 +89,25 @@ func (m *KeyboardMacro) Validate() error {
 }
 
 type Config struct {
-	STUN                       string                 `json:"stun"`
-	TurnServers                []TurnServer           `json:"turn_servers"`
-	JigglerEnabled             bool                   `json:"jiggler_enabled"`
-	UpdateDownloadProxy        string                 `json:"update_download_proxy"`
-	HashedPassword             string                 `json:"hashed_password"`
-	LocalAuthToken             string                 `json:"local_auth_token"`
-	LocalAuthMode              string                 `json:"localAuthMode"` // TODO: fix it with migration
-	LocalLoopbackOnly          bool                   `json:"local_loopback_only"`
-	UsbEnhancedDetection       bool                   `json:"usb_enhanced_detection"`
-	WakeOnLanDevices           []WakeOnLanDevice      `json:"wake_on_lan_devices"`
-	KeyboardMacros             []KeyboardMacro        `json:"keyboard_macros"`
-	KeyboardLayout             string                 `json:"keyboard_layout"`
-	EdidString                 string                 `json:"hdmi_edid_string"`
-	ForceHpd                   bool                   `json:"force_hpd"`
-	ActiveExtension            string                 `json:"active_extension"`
-	DisplayRotation            string                 `json:"display_rotation"`
-	DisplayMaxBrightness       int                    `json:"display_max_brightness"`
+	STUN                 string            `json:"stun"`
+	TurnServers          []TurnServer      `json:"turn_servers"`
+	JigglerEnabled       bool              `json:"jiggler_enabled"`
+	UpdateDownloadProxy  string            `json:"update_download_proxy"`
+	HashedPassword       string            `json:"hashed_password"`
+	LocalAuthToken       string            `json:"local_auth_token"`
+	LocalAuthMode        string            `json:"localAuthMode"` // TODO: fix it with migration
+	LocalLoopbackOnly    bool              `json:"local_loopback_only"`
+	UsbEnhancedDetection bool              `json:"usb_enhanced_detection"`
+	WakeOnLanDevices     []WakeOnLanDevice `json:"wake_on_lan_devices"`
+	KeyboardMacros       []KeyboardMacro   `json:"keyboard_macros"`
+	KeyboardLayout       string            `json:"keyboard_layout"`
+	EdidString           string            `json:"hdmi_edid_string"`
+	ForceHpd             bool              `json:"force_hpd"`
+	ActiveExtension      string            `json:"active_extension"`
+	DisplayRotation      string            `json:"display_rotation"`
+	// DisplayBrightnessPercent is the backlight percentage (0-100), the same unit the
+	// touchscreen slider and the web UI slider use.
+	DisplayBrightnessPercent   int                    `json:"display_brightness_percent"`
 	DisplayDimAfterSec         int                    `json:"display_dim_after_sec"`
 	DisplayOffAfterSec         int                    `json:"display_off_after_sec"`
 	TLSMode                    string                 `json:"tls_mode"` // options: "self-signed", "user-defined", ""
@@ -213,19 +215,19 @@ const (
 var builtOtaPublicKey = ""
 
 var defaultConfig = &Config{
-	STUN:                 "stun:stun.l.google.com:19302",
-	TurnServers:          []TurnServer{},
-	ActiveExtension:      "",
-	KeyboardMacros:       []KeyboardMacro{},
-	DisplayRotation:      "180",
-	TimeZone:             "UTC-8",
-	KeyboardLayout:       "en_US",
-	DisplayMaxBrightness: 64,
-	DisplayDimAfterSec:   120,  // 2 minutes
-	DisplayOffAfterSec:   1800, // 30 minutes
-	TLSMode:              "",
-	ForceHpd:             false,
-	UsbEnhancedDetection: true,
+	STUN:                     "stun:stun.l.google.com:19302",
+	TurnServers:              []TurnServer{},
+	ActiveExtension:          "",
+	KeyboardMacros:           []KeyboardMacro{},
+	DisplayRotation:          "180",
+	TimeZone:                 "UTC-8",
+	KeyboardLayout:           "en_US",
+	DisplayBrightnessPercent: 32,
+	DisplayDimAfterSec:       120,  // 2 minutes
+	DisplayOffAfterSec:       1800, // 30 minutes
+	TLSMode:                  "",
+	ForceHpd:                 false,
+	UsbEnhancedDetection:     true,
 	UsbConfig: &usbgadget.Config{
 		VendorId:     "0x1d6b", // The Linux Foundation
 		ProductId:    "0x0104", // Multifunction Composite Gadget
@@ -277,6 +279,49 @@ type ConfigMigrationFunc func(raw json.RawMessage) (json.RawMessage, error)
 
 var configMigrations = []ConfigMigrationFunc{
 	migrateLocalAuthMode,
+	migrateDisplayBrightnessPercent,
+}
+
+// migrateDisplayBrightnessPercent replaces the legacy raw backlight level
+// (display_max_brightness, 0-200) with a percentage (display_brightness_percent),
+// so the web UI, the touchscreen slider and the config all share one unit.
+func migrateDisplayBrightnessPercent(raw json.RawMessage) (json.RawMessage, error) {
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawMap); err != nil {
+		return nil, fmt.Errorf("migrateDisplayBrightnessPercent: failed to parse config JSON: %w", err)
+	}
+
+	if _, exists := rawMap["display_brightness_percent"]; exists {
+		delete(rawMap, "display_max_brightness")
+		return json.Marshal(rawMap)
+	}
+
+	percent := defaultConfig.DisplayBrightnessPercent
+	if levelRaw, exists := rawMap["display_max_brightness"]; exists {
+		var level int
+		if err := json.Unmarshal(levelRaw, &level); err == nil {
+			percent = displayBacklightPercent(level)
+		}
+		delete(rawMap, "display_max_brightness")
+	}
+
+	// The darkest slider position is backlightMinPercent, a legacy "0" level
+	// would leave the panel dark with no way to bring it back from the UI.
+	if percent < backlightMinPercent {
+		percent = backlightMinPercent
+	}
+
+	percentRaw, err := json.Marshal(percent)
+	if err != nil {
+		return nil, fmt.Errorf("migrateDisplayBrightnessPercent: failed to marshal percent: %w", err)
+	}
+	rawMap["display_brightness_percent"] = percentRaw
+
+	result, err := json.Marshal(rawMap)
+	if err != nil {
+		return nil, fmt.Errorf("migrateDisplayBrightnessPercent: failed to marshal migrated config: %w", err)
+	}
+	return result, nil
 }
 
 func migrateLocalAuthMode(raw json.RawMessage) (json.RawMessage, error) {

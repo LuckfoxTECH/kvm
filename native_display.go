@@ -18,26 +18,35 @@ var (
 
 var displaySocketConn net.Conn
 
-var displayOngoingRequests = make(map[int32]chan *CtrlResponse)
+var (
+	displayOngoingRequests     = make(map[int32]chan *CtrlResponse)
+	displayOngoingRequestsLock = &sync.Mutex{}
+	displayConnWriteLock       = &sync.Mutex{}
+)
 
 var displayLock = &sync.Mutex{}
 
 func CallDisplayCtrlAction(action string, params map[string]interface{}) (*CtrlResponse, error) {
 	displayLock.Lock()
 	defer displayLock.Unlock()
+
+	// The sequence number has to be reserved and registered atomically: the display
+	// socket handler looks the channel up from its own goroutine.
+	responseChan := make(chan *CtrlResponse, 1)
+	ctrlSeq := nextSeq()
+	displayOngoingRequestsLock.Lock()
+	displayOngoingRequests[ctrlSeq] = responseChan
+	displayOngoingRequestsLock.Unlock()
+
 	ctrlAction := CtrlAction{
 		Action: action,
-		Seq:    seq,
+		Seq:    ctrlSeq,
 		Params: params,
 	}
 
-	responseChan := make(chan *CtrlResponse)
-	displayOngoingRequests[seq] = responseChan
-	seq++
-
 	jsonData, err := json.Marshal(ctrlAction)
 	if err != nil {
-		delete(displayOngoingRequests, ctrlAction.Seq)
+		dropDisplayResponseChan(ctrlSeq)
 		return nil, fmt.Errorf("error marshaling ctrl action: %w", err)
 	}
 
@@ -49,13 +58,13 @@ func CallDisplayCtrlAction(action string, params map[string]interface{}) (*CtrlR
 
 	err = WriteDisplayCtrlMessage(jsonData)
 	if err != nil {
-		delete(displayOngoingRequests, ctrlAction.Seq)
+		dropDisplayResponseChan(ctrlSeq)
 		return nil, ErrorfL(&scopedLogger, "error writing display ctrl message", err)
 	}
 
 	select {
 	case response := <-responseChan:
-		delete(displayOngoingRequests, seq)
+		dropDisplayResponseChan(ctrlSeq)
 		if response.Error != "" {
 			return nil, ErrorfL(
 				&scopedLogger,
@@ -64,17 +73,47 @@ func CallDisplayCtrlAction(action string, params map[string]interface{}) (*CtrlR
 			)
 		}
 		return response, nil
-	case <-time.After(10 * time.Second):
-		close(responseChan)
-		delete(displayOngoingRequests, seq)
+	case <-time.After(3 * time.Second):
+		// Never close the channel here: a late response must be dropped, not sent
+		// on a closed channel (that panics the whole app).
+		dropDisplayResponseChan(ctrlSeq)
 		return nil, ErrorfL(&scopedLogger, "timeout waiting for response", nil)
 	}
 }
 
-func WriteDisplayCtrlMessage(message []byte) error {
-	if displaySocketConn == nil {
-		return fmt.Errorf("display socket not conn ected")
+// dropDisplayResponseChan unregisters a pending request, any response that arrives
+// later is discarded by the socket handler.
+func dropDisplayResponseChan(ctrlSeq int32) {
+	displayOngoingRequestsLock.Lock()
+	delete(displayOngoingRequests, ctrlSeq)
+	displayOngoingRequestsLock.Unlock()
+}
+
+// deliverDisplayResponse hands a parsed response to the goroutine waiting for it. The
+// channel is buffered so the socket handler never blocks and never panics.
+func deliverDisplayResponse(ctrlSeq int32, response *CtrlResponse) {
+	displayOngoingRequestsLock.Lock()
+	defer displayOngoingRequestsLock.Unlock()
+
+	responseChan, ok := displayOngoingRequests[ctrlSeq]
+	if !ok {
+		return
 	}
+
+	select {
+	case responseChan <- response:
+	default:
+	}
+}
+
+func WriteDisplayCtrlMessage(message []byte) error {
+	displayConnWriteLock.Lock()
+	defer displayConnWriteLock.Unlock()
+
+	if displaySocketConn == nil {
+		return fmt.Errorf("display socket not connected")
+	}
+
 	_, err := displaySocketConn.Write(message)
 	return err
 }
@@ -173,10 +212,19 @@ func handleDisplayCtrlClient(conn net.Conn) {
 		scopedLogger.Trace().Interface("data", displayResp).Msg("display sock msg")
 
 		if displayResp.Seq != 0 {
-			responseChan, ok := displayOngoingRequests[displayResp.Seq]
-			if ok {
-				responseChan <- &displayResp
-			}
+			response := displayResp
+			deliverDisplayResponse(response.Seq, &response)
+		}
+
+		// A response is never an event, dispatching it as one would feed it into
+		// HandleDisplayActionMessage as an unknown action.
+		if displayResp.Event == "" {
+			continue
+		}
+
+		switch displayResp.Event {
+		case "display_action":
+			HandleDisplayActionMessage(displayResp)
 		}
 	}
 

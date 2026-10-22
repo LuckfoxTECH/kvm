@@ -1,5 +1,5 @@
-import { useEffect, useCallback } from "react";
-import { Select as SelectMenuBasic , Button as AntdButton } from "antd";
+import { useEffect, useCallback, useRef, useState } from "react";
+import { Select as SelectMenuBasic , Button as AntdButton, Slider } from "antd";
 import {useReactAt} from 'i18n-auto-extractor/react'
 import { isMobile } from "react-device-detect";
 
@@ -37,6 +37,45 @@ export default function SettingsHardware() {
 
   const setBacklightSettings = useSettingsStore(state => state.setBacklightSettings);
 
+  // The slider is dragged continuously, so keep a local value for smooth feedback
+  // and only persist it after the user stops moving for a moment.
+  const [brightness, setBrightness] = useState(settings.backlightSettings.max_brightness);
+  const brightnessSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Follow changes made on the touchscreen or by another browser.
+  useEffect(() => {
+    setBrightness(settings.backlightSettings.max_brightness);
+  }, [settings.backlightSettings.max_brightness]);
+
+  useEffect(() => {
+    return () => {
+      if (brightnessSaveTimer.current) clearTimeout(brightnessSaveTimer.current);
+    };
+  }, []);
+
+  const sendBacklightSettings = useCallback((bl: BacklightSettings) => {
+    send("setBacklightSettings", { params: bl }, resp => {
+      if ("error" in resp) {
+        notifications.error(
+          `Failed to set backlight settings: ${resp.error.data || "Unknown error"}`,
+        );
+        return;
+      }
+    });
+  }, [send]);
+
+  const handleBrightnessChange = (value: number) => {
+    setBrightness(value);
+
+    const next = { ...useSettingsStore.getState().backlightSettings, max_brightness: value };
+    setBacklightSettings(next);
+
+    if (brightnessSaveTimer.current) clearTimeout(brightnessSaveTimer.current);
+    brightnessSaveTimer.current = setTimeout(() => {
+      sendBacklightSettings(next);
+    }, 300);
+  };
+
   const handleBacklightSettingsChange = (settings: BacklightSettings) => {
     // If the user has set the display to dim after it turns off, set the dim_after
     // value to never.
@@ -70,7 +109,27 @@ export default function SettingsHardware() {
       const result = resp.result as BacklightSettings;
       setBacklightSettings(result);
     });
+
+    send("getDisplayState", {}, resp => {
+      if ("error" in resp) return;
+      const result = resp.result as { on: boolean };
+      useSettingsStore.getState().setDisplayOn(result.on);
+    });
   }, [send, setBacklightSettings]);
+
+  // One click display off / on, mirrored by the displayState event.
+  const handleToggleDisplay = () => {
+    send("toggleDisplay", {}, resp => {
+      if ("error" in resp) {
+        notifications.error(
+          `Failed to switch display: ${resp.error.data || "Unknown error"}`,
+        );
+        return;
+      }
+      const result = resp.result as { on: boolean };
+      useSettingsStore.getState().setDisplayOn(result.on);
+    });
+  };
 
   const setTimeZone = useSettingsStore(state => state.setTimeZone);
 
@@ -181,25 +240,29 @@ export default function SettingsHardware() {
             }}
           />
         </SettingsItem>
-        <SettingsItem
-          title={$at("Display Brightness")}
-          description={$at("Set the brightness of the display")}
-        >
-          <SelectMenuBasic
-            value={settings.backlightSettings.max_brightness.toString()}
-            className={`${isMobile?"w-full":"h-[36px] w-[22%]"}`}
-            options={[
-              { value: "0", label: $at("Off") },
-              { value: "64", label: $at("Low") },
-              { value: "128", label: $at("Medium") },
-              { value: "200", label: $at("High") },
-            ]}
-            onChange={e => {
-              settings.backlightSettings.max_brightness = parseInt(e);
-              handleBacklightSettingsChange(settings.backlightSettings);
-            }}
-          />
-        </SettingsItem>
+        <div className="select-none">
+          <SettingsItem
+            title={$at("Display Brightness")}
+            description={$at("Set the brightness of the display")}
+            noCol
+          >
+            <AntdButton className="shrink-0" onClick={handleToggleDisplay}>
+              {settings.displayOn ? $at("Screen Off") : $at("Screen On")}
+            </AntdButton>
+          </SettingsItem>
+          <div className="flex items-center gap-3 px-2 pb-1">
+            <Slider
+              className="flex-1"
+              min={10}
+              max={100}
+              step={1}
+              value={brightness}
+              tooltip={{ formatter: value => `${value}%` }}
+              onChange={handleBrightnessChange}
+            />
+            <span className="w-[38px] shrink-0 text-right">{brightness}%</span>
+          </div>
+        </div>
         {/* <SettingsItem
           title="Enable Ctrl+Alt+Del Action Bar"
           description="Enable or disable the action bar action for sending a Ctrl+Alt+Del to the host"

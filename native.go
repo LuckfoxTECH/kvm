@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/webrtc/v4/pkg/media"
@@ -34,6 +35,12 @@ type EventHandler func(event CtrlResponse)
 
 var seq int32 = 1
 
+// nextSeq hands out the next control request sequence number. It is atomic because
+// several control sockets reserve sequence numbers from concurrent goroutines.
+func nextSeq() int32 {
+	return atomic.AddInt32(&seq, 1)
+}
+
 var ongoingRequests = make(map[int32]chan *CtrlResponse)
 
 var lock = &sync.Mutex{}
@@ -52,13 +59,12 @@ func CallCtrlAction(action string, params map[string]interface{}) (*CtrlResponse
 	defer lock.Unlock()
 	ctrlAction := CtrlAction{
 		Action: action,
-		Seq:    seq,
+		Seq:    nextSeq(),
 		Params: params,
 	}
 
-	responseChan := make(chan *CtrlResponse)
-	ongoingRequests[seq] = responseChan
-	seq++
+	responseChan := make(chan *CtrlResponse, 1)
+	ongoingRequests[ctrlAction.Seq] = responseChan
 
 	jsonData, err := json.Marshal(ctrlAction)
 	if err != nil {

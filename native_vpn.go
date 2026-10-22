@@ -26,13 +26,12 @@ func CallVpnCtrlAction(action string, params map[string]interface{}) (*CtrlRespo
 	vpnLock.Lock()
 	ctrlAction := CtrlAction{
 		Action: action,
-		Seq:    seq,
+		Seq:    nextSeq(),
 		Params: params,
 	}
 
 	responseChan := make(chan *CtrlResponse, 1)
 	vpnOngoingRequests[ctrlAction.Seq] = responseChan
-	seq++
 	vpnLock.Unlock()
 
 	jsonData, err := json.Marshal(ctrlAction)

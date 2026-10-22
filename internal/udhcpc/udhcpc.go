@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -148,6 +149,42 @@ func (c *DHCPClient) runUDHCPC() {
 	if err := cmd.Run(); err != nil {
 		c.logger.Error().Err(err).Msg("failed to run udhcpc")
 	}
+}
+
+// Restart kills the current udhcpc, drops the interface address and starts a fresh
+// DHCP discover. A plain renew (SIGUSR1) keeps asking the previous server for the
+// previous address, so it cannot move the device to a different subnet; and with
+// "-t 1" a failed renew makes udhcpc exit, leaving the interface without a client.
+func (c *DHCPClient) Restart() error {
+	if !c.enabled {
+		return fmt.Errorf("dhcp client is disabled")
+	}
+
+	if err := c.KillProcess(); err != nil {
+		c.logger.Warn().Err(err).Msg("failed to stop udhcpc before restart")
+	}
+
+	// Let the kernel tear the process down before the address is flushed.
+	time.Sleep(200 * time.Millisecond)
+
+	if err := flushInterfaceAddress(c.InterfaceName); err != nil {
+		c.logger.Warn().Err(err).Str("interface", c.InterfaceName).Msg("failed to flush interface address")
+	}
+
+	// A pinned request address would keep the client on the old subnet.
+	c.requestAddress = ""
+
+	go c.runUDHCPC()
+	return nil
+}
+
+func flushInterfaceAddress(iface string) error {
+	cmd := exec.Command("ip", "addr", "flush", "dev", iface)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ip addr flush dev %s: %w (%s)", iface, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // Run starts the DHCP client and watches the lease file for changes.

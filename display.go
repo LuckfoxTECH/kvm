@@ -4,7 +4,9 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,9 +18,25 @@ var (
 	offTicker *time.Ticker
 )
 
+// backlightFadeMu serialises backlight ramps so two fades cannot interleave.
+var backlightFadeMu sync.Mutex
+
+// backlightOffSince stores the unix nano timestamp of the last fade to black, or 0
+// when the display is lit. Touch events inside displayOffTouchGuard are ignored so
+// the finger that switched the display off cannot wake it up again.
+var backlightOffSince atomic.Int64
+
 const (
 	touchscreenDevice     string = "/dev/input/event0"
 	backlightControlClass string = "/sys/class/backlight/backlight/brightness"
+
+	// displayFadeDuration is how long the backlight takes to ramp to the target
+	// level when the display is switched off.
+	displayFadeDuration = 200 * time.Millisecond
+	// displayFadeStep is the delay between two brightness writes of a fade.
+	displayFadeStep = 20 * time.Millisecond
+	// displayOffTouchGuard ignores touch input right after the display went dark.
+	displayOffTouchGuard = time.Second
 )
 
 func switchToScreen(screen string) {
@@ -101,7 +119,6 @@ var (
 )
 
 func updateDisplay() {
-	updateLabelIfChanged("Network_Address_IP_Label", networkState.IPv4String())
 	updateLabelIfChanged("Version_Hostname_Label", GetHostname())
 
 	if usbState == "configured" {
@@ -119,11 +136,9 @@ func updateDisplay() {
 		_ = os.WriteFile("/userdata/hdmi_state", []byte("disconnected"), 0644)
 	}
 
-	if networkState.IsUp() {
-		_, _ = lvObjSetState("Network", "NETWORK")
-	} else {
-		_, _ = lvObjSetState("Network", "NO_NETWORK")
-	}
+	pushMainNetworkState()
+	pushNetworkDetail()
+	pushUsbDetail()
 }
 
 var (
@@ -160,11 +175,86 @@ func waitCtrlAndRequestDisplayUpdate(shouldWakeDisplay bool) {
 
 func updateStaticContents() {
 	//contents that never change
-	updateLabelIfChanged("Network_Address_Mac_Label", networkState.MACString())
 	_, appVersion, err := GetLocalVersion()
 	if err == nil {
 		updateLabelIfChanged("Version_App_Version_Label", appVersion.String())
 	}
+}
+
+// readDisplayBrightness returns the current hardware backlight level, it returns
+// false when the backlight class cannot be read.
+func readDisplayBrightness() (int, bool) {
+	data, err := os.ReadFile(backlightControlClass)
+	if err != nil {
+		return 0, false
+	}
+	level, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, false
+	}
+	return level, true
+}
+
+// writeDisplayBrightness writes a raw backlight level without logging.
+func writeDisplayBrightness(brightness int) error {
+	if brightness > 200 || brightness < 0 {
+		return errors.New("brightness value out of bounds, must be between 0 and 200")
+	}
+
+	if _, err := os.Stat(backlightControlClass); errors.Is(err, os.ErrNotExist) {
+		return errors.New("brightness value cannot be set, possibly not running on KVM hardware")
+	}
+
+	return os.WriteFile(backlightControlClass, []byte(strconv.Itoa(brightness)), 0644)
+}
+
+// fadeDisplayBrightness ramps the backlight from its current level to target in
+// small steps, so switching the display off fades out instead of snapping.
+func fadeDisplayBrightness(target int, duration time.Duration) error {
+	backlightFadeMu.Lock()
+	defer backlightFadeMu.Unlock()
+
+	from, ok := readDisplayBrightness()
+	if !ok {
+		return writeDisplayBrightness(target)
+	}
+	if from == target {
+		return nil
+	}
+
+	steps := int(duration / displayFadeStep)
+	if steps < 1 {
+		steps = 1
+	}
+
+	for i := 1; i <= steps; i++ {
+		level := from + (target-from)*i/steps
+		if err := writeDisplayBrightness(level); err != nil {
+			return err
+		}
+		time.Sleep(displayFadeStep)
+	}
+
+	return nil
+}
+
+// switchDisplayOff fades the backlight out and arms the touch guard so the
+// releasing finger cannot switch the display back on.
+func switchDisplayOff() {
+	if err := fadeDisplayBrightness(0, displayFadeDuration); err != nil {
+		displayLogger.Warn().Err(err).Msg("failed to switch display off")
+	}
+
+	// Make sure the panel is really dark even when the fade could not read the
+	// current level.
+	if err := writeDisplayBrightness(0); err != nil {
+		displayLogger.Warn().Err(err).Msg("failed to switch display off")
+	}
+
+	backlightOffSince.Store(time.Now().UnixNano())
+	backlightState = 2
+
+	notifyDisplayState(false)
 }
 
 // setDisplayBrightness sets /sys/class/backlight/backlight/brightness to alter
@@ -172,19 +262,7 @@ func updateStaticContents() {
 func setDisplayBrightness(brightness int) error {
 	// NOTE: The actual maximum value for this is 255, but out-of-the-box, the value is set to 64.
 	// The maximum set here is set to 100 to reduce the risk of drawing too much power (and besides, 255 is very bright!).
-	if brightness > 200 || brightness < 0 {
-		return errors.New("brightness value out of bounds, must be between 0 and 100")
-	}
-
-	// Check the display backlight class is available
-	if _, err := os.Stat(backlightControlClass); errors.Is(err, os.ErrNotExist) {
-		return errors.New("brightness value cannot be set, possibly not running on KVM hardware")
-	}
-
-	// Set the value
-	bs := []byte(strconv.Itoa(brightness))
-	err := os.WriteFile(backlightControlClass, bs, 0644)
-	if err != nil {
+	if err := writeDisplayBrightness(brightness); err != nil {
 		return err
 	}
 
@@ -195,7 +273,7 @@ func setDisplayBrightness(brightness int) error {
 // tick_displayDim() is called when when dim ticker expires, it simply reduces the brightness
 // of the display by half of the max brightness.
 func tick_displayDim() {
-	err := setDisplayBrightness(config.DisplayMaxBrightness / 2)
+	err := setDisplayBrightness(displayConfiguredBrightnessLevel() / 2)
 	if err != nil {
 		displayLogger.Warn().Err(err).Msg("failed to dim display")
 	}
@@ -205,20 +283,15 @@ func tick_displayDim() {
 	backlightState = 1
 }
 
-// tick_displayOff() is called when the off ticker expires, it turns off the display
-// by setting the brightness to zero.
+// tick_displayOff() is called when the off ticker expires, it fades the display out
+// by ramping the brightness down to zero.
 func tick_displayOff() {
-	err := setDisplayBrightness(0)
-	if err != nil {
-		displayLogger.Warn().Err(err).Msg("failed to turn off display")
-	}
+	switchDisplayOff()
 
 	offTicker.Stop()
-
-	backlightState = 2
 }
 
-// wakeDisplay sets the display brightness back to config.DisplayMaxBrightness and stores the time the display
+// wakeDisplay sets the display brightness back to the configured percentage and stores the time the display
 // last woke, ready for displayTimeoutTick to put the display back in the dim/off states.
 // Set force to true to skip the backlight state check, this should be done if altering the tickers.
 func wakeDisplay(force bool) {
@@ -227,11 +300,11 @@ func wakeDisplay(force bool) {
 	}
 
 	// Don't try to wake up if the display is turned off.
-	if config.DisplayMaxBrightness == 0 {
+	if config.DisplayBrightnessPercent == 0 {
 		return
 	}
 
-	err := setDisplayBrightness(config.DisplayMaxBrightness)
+	err := setDisplayBrightness(displayConfiguredBrightnessLevel())
 	if err != nil {
 		displayLogger.Warn().Err(err).Msg("failed to wake display")
 	}
@@ -243,7 +316,10 @@ func wakeDisplay(force bool) {
 	if config.DisplayOffAfterSec != 0 {
 		offTicker.Reset(time.Duration(config.DisplayOffAfterSec) * time.Second)
 	}
+	backlightOffSince.Store(0)
 	backlightState = 0
+
+	notifyDisplayState(true)
 }
 
 // watchTsEvents monitors the touchscreen for events and simply calls wakeDisplay() to ensure the
@@ -268,6 +344,13 @@ func watchTsEvents() {
 			return
 		}
 
+		// Ignore the touches that belong to the gesture which switched the display
+		// off, otherwise the panel lights up again immediately.
+		if offSince := backlightOffSince.Load(); offSince != 0 &&
+			time.Since(time.Unix(0, offSince)) < displayOffTouchGuard {
+			continue
+		}
+
 		wakeDisplay(false)
 	}
 }
@@ -278,7 +361,7 @@ func watchTsEvents() {
 func startBacklightTickers() {
 	// Don't start the tickers if the display is switched off.
 	// Set the display to off if that's the case.
-	if config.DisplayMaxBrightness == 0 {
+	if config.DisplayBrightnessPercent == 0 {
 		_ = setDisplayBrightness(0)
 		return
 	}
@@ -327,6 +410,7 @@ func initDisplay() {
 		displayLogger.Info().Msg("setting initial display contents")
 		time.Sleep(500 * time.Millisecond)
 		_, _ = lvDispSetRotation(config.DisplayRotation)
+		pushBacklightToDisplay(config.DisplayBrightnessPercent)
 		updateStaticContents()
 		initTimeZone()
 		displayInited = true

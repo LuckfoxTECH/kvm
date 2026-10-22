@@ -441,6 +441,8 @@
   "28d0edd045": "Low",
   "87f8a6ab85": "Medium",
   "655d20c1ca": "High",
+  "c19816962e": "Screen Off",
+  "178f735f3a": "Screen On",
   "3b9e4fb575": "Dim Display After",
   "2496239ef1": "Set how long to wait before dimming the display",
   "180bd3b9ac": "Turn off Display After",

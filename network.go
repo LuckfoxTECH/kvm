@@ -164,6 +164,11 @@ func rpcRenewDHCPLease() error {
 	return networkState.RpcRenewDHCPLease()
 }
 
+// rpcRestartDHCPClient drops the current lease and runs a fresh DHCP discover.
+func rpcRestartDHCPClient() error {
+	return networkState.RpcRestartDHCPClient()
+}
+
 func rpcRequestDHCPAddress(ip string) error {
 	return networkState.RpcRequestDHCPAddress(ip)
 }

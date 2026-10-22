@@ -330,6 +330,7 @@ export interface VideoState {
 }
 
 export interface BacklightSettings {
+  /** Brightness percentage (0-100), same unit as the touchscreen slider. */
   max_brightness: number;
   dim_after: number;
   off_after: number;
@@ -387,6 +388,10 @@ interface SettingsState {
 
   backlightSettings: BacklightSettings;
   setBacklightSettings: (settings: BacklightSettings) => void;
+
+  /** Whether the panel is currently lit, kept in sync by the `displayState` event. */
+  displayOn: boolean;
+  setDisplayOn: (on: boolean) => void;
   
   timeZone: string;
   setTimeZone: (timezone: string) => void;
@@ -464,12 +469,15 @@ export const useSettingsStore = create(
       setDisplayRotation: (rotation: string) => set({ displayRotation: rotation }),
 
       backlightSettings: {
-        max_brightness: 100,
+        max_brightness: 32,
         dim_after: 10000,
         off_after: 50000,
       },
       setBacklightSettings: (settings: BacklightSettings) =>
         set({ backlightSettings: settings }),
+
+      displayOn: true,
+      setDisplayOn: (on: boolean) => set({ displayOn: on }),
 
       timeZone: "CST-8",
       setTimeZone: (timezone: string) => set({ timeZone: timezone }),
