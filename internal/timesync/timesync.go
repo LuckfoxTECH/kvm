@@ -49,8 +49,9 @@ type TimeSyncOptions struct {
 }
 
 type SyncMode struct {
-	Ntp             bool
-	Http            bool
+	Disabled          bool
+	Ntp               bool
+	Http              bool
 	Ordering        []string
 	NtpUseFallback  bool
 	HttpUseFallback bool
@@ -70,8 +71,8 @@ func NewTimeSync(opts *TimeSyncOptions) *TimeSync {
 		rtcDevicePath: rtcDevice,
 		rtcLock:       &sync.Mutex{},
 		preCheckFunc:  opts.PreCheckFunc,
-		ntpServers:    defaultNTPServers,
-		httpUrls:      defaultHTTPUrls,
+		ntpServers:    activeNTPServers(opts.NetworkConfig),
+		httpUrls:      activeHTTPUrls(opts.NetworkConfig),
 		networkConfig: opts.NetworkConfig,
 	}
 
@@ -81,6 +82,52 @@ func NewTimeSync(opts *TimeSyncOptions) *TimeSync {
 	}
 
 	return t
+}
+
+func (t *TimeSync) SetNetworkConfig(cfg *network.NetworkConfig) {
+	t.syncLock.Lock()
+	defer t.syncLock.Unlock()
+	t.networkConfig = cfg
+	t.ntpServers = activeNTPServers(cfg)
+	t.httpUrls = activeHTTPUrls(cfg)
+}
+
+func activeNTPServers(cfg *network.NetworkConfig) []string {
+	var out []string
+	if cfg != nil {
+		// nil means "never configured" -> use every built-in server.
+		// An empty (non-nil) slice means the user explicitly deselected all of them.
+		if cfg.TimeSyncNtpServers == nil {
+			out = append(out, DefaultNTPServers()...)
+		} else {
+			out = append(out, cfg.TimeSyncNtpServers...)
+		}
+		for _, c := range cfg.TimeSyncNtpCustom {
+			if c.Enabled && c.Server != "" {
+				out = append(out, c.Server)
+			}
+		}
+	}
+	return out
+}
+
+func activeHTTPUrls(cfg *network.NetworkConfig) []string {
+	var out []string
+	if cfg != nil {
+		// nil means "never configured" -> use every built-in URL.
+		// An empty (non-nil) slice means the user explicitly deselected all of them.
+		if cfg.TimeSyncHttpUrls == nil {
+			out = append(out, DefaultHTTPUrls()...)
+		} else {
+			out = append(out, cfg.TimeSyncHttpUrls...)
+		}
+		for _, c := range cfg.TimeSyncHttpCustom {
+			if c.Enabled && c.Server != "" {
+				out = append(out, c.Server)
+			}
+		}
+	}
+	return out
 }
 
 func (t *TimeSync) getSyncMode() SyncMode {
@@ -103,6 +150,8 @@ func (t *TimeSync) getSyncMode() SyncMode {
 		syncMode.Ntp = true
 	case "http_only":
 		syncMode.Http = true
+	case "disabled":
+		syncMode.Disabled = true
 	default:
 		syncMode.Ntp = true
 		syncMode.Http = true
@@ -156,6 +205,12 @@ func (t *TimeSync) Sync() error {
 	)
 
 	syncMode := t.getSyncMode()
+
+	// disabled mode: keep the current system date, skip all network sync
+	if syncMode.Disabled {
+		t.syncSuccess = true
+		return nil
+	}
 
 	metricTimeSyncCount.Inc()
 

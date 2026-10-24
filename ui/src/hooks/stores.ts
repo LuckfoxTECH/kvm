@@ -1000,6 +1000,11 @@ export interface IPv4StaticConfig {
   dns?: string[];
 }
 
+export interface TimeSyncCustomServer {
+  server: string;
+  enabled: boolean;
+}
+
 export interface NetworkSettings {
   hostname: string;
   domain: string;
@@ -1014,6 +1019,10 @@ export interface NetworkSettings {
   lldp_tx_tlvs: string[];
   mdns_mode: mDNSMode;
   time_sync_mode: TimeSyncMode;
+  time_sync_ntp_servers?: string[];
+  time_sync_http_urls?: string[];
+  time_sync_ntp_custom?: TimeSyncCustomServer[];
+  time_sync_http_custom?: TimeSyncCustomServer[];
   pending_reboot?: boolean;
 }
 

@@ -2026,6 +2026,7 @@ var rpcHandlers = map[string]RPCHandler{
 	"getNetworkState":           {Func: rpcGetNetworkState},
 	"getNetworkSettings":        {Func: rpcGetNetworkSettings},
 	"setNetworkSettings":        {Func: rpcSetNetworkSettings, Params: []string{"settings"}},
+	"getTimeSyncServers":        {Func: rpcGetTimeSyncServers},
 	"setEthernetMacAddress":     {Func: rpcSetEthernetMacAddress, Params: []string{"macAddress"}},
 	"renewDHCPLease":            {Func: rpcRenewDHCPLease},
 	"requestDHCPAddress":        {Func: rpcRequestDHCPAddress, Params: []string{"ip"}},

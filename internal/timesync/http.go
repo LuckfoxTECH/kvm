@@ -19,9 +19,16 @@ var defaultHTTPUrls = []string{
 	// "http://www.msftconnecttest.com/connecttest.txt",
 }
 
+func DefaultHTTPUrls() []string {
+	urls := make([]string, len(defaultHTTPUrls))
+	copy(urls, defaultHTTPUrls)
+	return urls
+}
+
 func (t *TimeSync) queryAllHttpTime() (now *time.Time) {
 	chunkSize := 4
-	httpUrls := t.httpUrls
+	httpUrls := make([]string, len(t.httpUrls))
+	copy(httpUrls, t.httpUrls)
 
 	// shuffle the http urls to avoid always querying the same servers
 	rand.Shuffle(len(httpUrls), func(i, j int) { httpUrls[i], httpUrls[j] = httpUrls[j], httpUrls[i] })

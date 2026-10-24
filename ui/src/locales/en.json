@@ -696,5 +696,16 @@
   "7623da11b3": "Unpin bars",
   "101c1c159f": "Show tools",
   "74bc71db4d": "Hide tools",
-  "a445a2a2a0": "Show bars"
+  "a445a2a2a0": "Show bars",
+  "36ee8d91c0": "HTTP Servers",
+  "e44765a469": "Built-in servers",
+  "203ff6d120": "Custom servers",
+  "e2a2085dd4": "No custom servers",
+  "ef637db255": "Add custom server",
+  "92a50e5dea": "Restore built-in defaults",
+  "1bca035d35": "NTP only",
+  "d493607010": "NTP and HTTP",
+  "ea43e91e88": "HTTP only",
+  "6512c95a57": "Disabled (use system time)",
+  "a2d49a19ac": "No servers selected, time synchronization will fail"
 }

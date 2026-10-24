@@ -21,9 +21,16 @@ var defaultNTPServers = []string{
 	"3.pool.ntp.org",
 }
 
+func DefaultNTPServers() []string {
+	ntpServers := make([]string, len(defaultNTPServers))
+	copy(ntpServers, defaultNTPServers)
+	return ntpServers
+}
+
 func (t *TimeSync) queryNetworkTime() (now *time.Time, offset *time.Duration) {
 	chunkSize := 4
-	ntpServers := t.ntpServers
+	ntpServers := make([]string, len(t.ntpServers))
+	copy(ntpServers, t.ntpServers)
 
 	// shuffle the ntp servers to avoid always querying the same servers
 	rand.Shuffle(len(ntpServers), func(i, j int) { ntpServers[i], ntpServers[j] = ntpServers[j], ntpServers[i] })

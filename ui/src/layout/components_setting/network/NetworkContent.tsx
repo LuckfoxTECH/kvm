@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
-import { LuEthernetPort } from "react-icons/lu";
+import { LuEthernetPort, LuTrash2, LuPlus } from "react-icons/lu";
 import { Button as AntdButton, Select , Input } from "antd";
 import { useReactAt } from "i18n-auto-extractor/react";
 import { isMobile } from "react-device-detect";
@@ -19,6 +19,7 @@ import {
   useNetworkStateStore,
 } from "@/hooks/stores";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
+import { TimeSyncCustomServer } from "@/hooks/stores";
 import { Button } from "@components/Button";
 import { GridCard } from "@components/Card";
 import { InputFieldWithLabel } from "@components/InputField";
@@ -49,6 +50,164 @@ const defaultNetworkSettings: NetworkSettings = {
   mdns_mode: "unknown",
   time_sync_mode: "unknown",
 };
+
+const MAX_VISIBLE_SERVER_ROWS = 4;
+const SERVER_ROW_HEIGHT_PX = 36;
+const GREEN_ACTION_BUTTON_CLASSNAME =
+  "!h-[36px] !text-[rgba(20,204,45,1)] !border-[rgba(20,204,45,1)]";
+
+function TimeSyncServerBlock(props: {
+  title: string;
+  builtinOptions: string[];
+  selected?: string[];
+  customs?: TimeSyncCustomServer[];
+  onToggleBuiltin: (server: string, checked: boolean) => void;
+  onAddCustom: (server: string) => void;
+  onToggleCustom: (index: number, enabled: boolean) => void;
+  onRemoveCustom: (index: number) => void;
+  onReset: () => void;
+}) {
+  const { $at } = useReactAt();
+  const [customInput, setCustomInput] = useState("");
+  const { title, builtinOptions, selected, customs } = props;
+
+  // A missing (null/undefined) selection means "never configured -> use all built-in servers".
+  // An empty selection means the user explicitly deselected every built-in server.
+  // The backend marshals a nil slice as JSON null, so both null and undefined must be handled.
+  const isBuiltinChecked = (server: string) => (selected == null ? true : selected.includes(server));
+  const customCount = customs?.length ?? 0;
+  const enabledCustomCount = (customs ?? []).filter(customServer => customServer.enabled && customServer.server).length;
+  const checkedBuiltinCount = builtinOptions.filter(server => isBuiltinChecked(server)).length;
+  const hasActiveServer = checkedBuiltinCount + enabledCustomCount > 0;
+  const maxListHeight = (rowCount: number) =>
+    rowCount > MAX_VISIBLE_SERVER_ROWS ? MAX_VISIBLE_SERVER_ROWS * SERVER_ROW_HEIGHT_PX : undefined;
+  const rowBorder = "border-slate-800/10 dark:border-slate-300/20";
+  const labelTextClassName = "text-sm text-slate-600 dark:text-[#ffffff]";
+
+  return (
+    <GridCard>
+      <div className="animate-fadeIn p-4 text-black dark:text-white">
+        <div className="space-y-3">
+          <h3 className="text-base font-bold text-slate-900 dark:text-white">{title}</h3>
+
+          <div>
+            <div className={`mb-1 ${labelTextClassName}`}>{$at("Built-in servers")}</div>
+            <div
+              className={`overflow-y-auto rounded-sm border ${rowBorder}`}
+              style={{ maxHeight: maxListHeight(builtinOptions.length) }}
+            >
+              {builtinOptions.map((server, index) => (
+                <label
+                  key={server}
+                  className={`flex cursor-pointer items-center gap-x-2 px-3 py-2 ${
+                    index > 0 ? `border-t ${rowBorder}` : ""
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    className="accent-blue-600"
+                    checked={isBuiltinChecked(server)}
+                    onChange={e => props.onToggleBuiltin(server, e.target.checked)}
+                  />
+                  <span className="text-sm font-medium">{server}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className={`mb-1 ${labelTextClassName}`}>{$at("Custom servers")}</div>
+            <div
+              className={`overflow-y-auto rounded-sm border ${rowBorder}`}
+              style={{ maxHeight: maxListHeight(customCount) }}
+            >
+              {customCount === 0 ? (
+                <div className="px-3 py-2 text-sm italic text-slate-400 dark:text-slate-500">
+                  {$at("No custom servers")}
+                </div>
+              ) : (
+                customs!.map((customServer, index) => (
+                  <div
+                    key={`${customServer.server}-${index}`}
+                    className={`flex items-center gap-x-2 px-3 py-2 ${
+                      index > 0 ? `border-t ${rowBorder}` : ""
+                    }`}
+                  >
+                    <label className="flex flex-1 cursor-pointer items-center gap-x-2">
+                      <input
+                        type="checkbox"
+                        className="accent-blue-600"
+                        checked={customServer.enabled}
+                        onChange={e => props.onToggleCustom(index, e.target.checked)}
+                      />
+                      <span
+                        className={`text-sm font-medium ${
+                          customServer.enabled ? "" : "text-slate-400 line-through dark:text-slate-500"
+                        }`}
+                      >
+                        {customServer.server}
+                      </span>
+                    </label>
+                    <button
+                      type="button"
+                      title={$at("Delete")}
+                      className="text-slate-400 transition-colors hover:text-red-500 dark:text-slate-500"
+                      onClick={() => props.onRemoveCustom(index)}
+                    >
+                      <LuTrash2 size={16} />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {!hasActiveServer && (
+            <div className="rounded-sm border border-red-500/60 bg-red-50/60 px-3 py-2 text-sm text-red-600 dark:border-red-500/40 dark:bg-red-900/20 dark:text-red-400">
+              {$at("No servers selected, time synchronization will fail")}
+            </div>
+          )}
+
+          <div className="flex items-center gap-x-2">
+            <Input
+              type="text"
+              value={customInput}
+              onChange={e => setCustomInput(e.target.value)}
+              onPressEnter={() => {
+                const value = customInput.trim();
+                if (!value) return;
+                props.onAddCustom(value);
+                setCustomInput("");
+              }}
+              placeholder={$at("Add custom server")}
+              className="!h-[36px] flex-1"
+            />
+            <AntdButton
+              type="primary"
+              className="!h-[36px]"
+              disabled={!customInput.trim()}
+              icon={<LuPlus size={16} />}
+              onClick={() => {
+                const value = customInput.trim();
+                if (!value) return;
+                props.onAddCustom(value);
+                setCustomInput("");
+              }}
+            >
+              {$at("Add")}
+            </AntdButton>
+          </div>
+
+          <div>
+            <AntdButton className={GREEN_ACTION_BUTTON_CLASSNAME} onClick={props.onReset}>
+              {$at("Restore built-in defaults")}
+            </AntdButton>
+          </div>
+        </div>
+      </div>
+    </GridCard>
+  );
+}
 
 export function LifeTimeLabel({ lifetime }: { lifetime: string }) {
   const [remaining, setRemaining] = useState<string | null>(null);
@@ -235,10 +394,20 @@ export default function SettingsNetwork() {
     });
   }, [send]);
 
+  const [timeSyncServerOptions, setTimeSyncServerOptions] = useState<{ ntp: string[]; http: string[] }>({ ntp: [], http: [] });
+
+  const getTimeSyncServers = useCallback(() => {
+    send("getTimeSyncServers", {}, resp => {
+      if ("error" in resp) return;
+      setTimeSyncServerOptions(resp.result as { ntp: string[]; http: string[] });
+    });
+  }, [send]);
+
   useEffect(() => {
     getNetworkState();
     getNetworkSettings();
-  }, [getNetworkState, getNetworkSettings]);
+    getTimeSyncServers();
+  }, [getNetworkState, getNetworkSettings, getTimeSyncServers]);
 
   useEffect(() => {
     if (networkState?.mac_address && initialMacAddress.current === "") {
@@ -519,10 +688,11 @@ export default function SettingsNetwork() {
                 }}
                 options={filterUnknown([
                   { value: "unknown", label: "..." },
-                  // { value: "auto", label: "Auto" },
-                  { value: "ntp_only", label: "NTP only" },
-                  { value: "ntp_and_http", label: "NTP and HTTP" },
-                  { value: "http_only", label: "HTTP only" },
+                  // { value: "auto", label: $at("Auto") },
+                  { value: "ntp_only", label: $at("NTP only") },
+                  { value: "ntp_and_http", label: $at("NTP and HTTP") },
+                  { value: "http_only", label: $at("HTTP only") },
+                  { value: "disabled", label: $at("Disabled (use system time)") },
                   // { value: "custom", label: "Custom" },
                 ])}/>
               {/*<SelectMenuBasic*/}
@@ -542,6 +712,91 @@ export default function SettingsNetwork() {
               {/*  ])}*/}
               {/*/>*/}
             </SettingsItem>
+
+            {(networkSettings.time_sync_mode === "ntp_only" ||
+              networkSettings.time_sync_mode === "ntp_and_http") && (
+              <TimeSyncServerBlock
+                title={$at("NTP Servers")}
+                builtinOptions={timeSyncServerOptions.ntp}
+                selected={networkSettings.time_sync_ntp_servers}
+                customs={networkSettings.time_sync_ntp_custom}
+                onToggleBuiltin={(server, checked) => {
+                  const all = timeSyncServerOptions.ntp;
+                  // null/undefined means "all built-ins"; an empty array stays empty
+                  const current =
+                    networkSettings.time_sync_ntp_servers == null ? [...all] : [...networkSettings.time_sync_ntp_servers];
+                  const next = checked
+                    ? [...current, server]
+                    : current.filter(s => s !== server);
+                  // re-checking everything restores the "use all built-ins" default;
+                  // an empty list is kept as-is so "none selected" survives a reload
+                  const value = next.length === all.length ? undefined : next;
+                  setNetworkSettings({ ...networkSettings, time_sync_ntp_servers: value });
+                }}
+                onAddCustom={server => {
+                  const customs = [...(networkSettings.time_sync_ntp_custom ?? []), { server, enabled: true }];
+                  setNetworkSettings({ ...networkSettings, time_sync_ntp_custom: customs });
+                }}
+                onToggleCustom={(index, enabled) => {
+                  const customs = (networkSettings.time_sync_ntp_custom ?? []).map((c, i) =>
+                    i === index ? { ...c, enabled } : c,
+                  );
+                  setNetworkSettings({ ...networkSettings, time_sync_ntp_custom: customs });
+                }}
+                onRemoveCustom={index => {
+                  const customs = (networkSettings.time_sync_ntp_custom ?? []).filter((_, i) => i !== index);
+                  setNetworkSettings({ ...networkSettings, time_sync_ntp_custom: customs.length ? customs : undefined });
+                }}
+                onReset={() => {
+                  setNetworkSettings({
+                    ...networkSettings,
+                    time_sync_ntp_servers: undefined,
+                    time_sync_ntp_custom: undefined,
+                  });
+                }}
+              />
+            )}
+
+            {(networkSettings.time_sync_mode === "http_only" ||
+              networkSettings.time_sync_mode === "ntp_and_http") && (
+              <TimeSyncServerBlock
+                title={$at("HTTP Servers")}
+                builtinOptions={timeSyncServerOptions.http}
+                selected={networkSettings.time_sync_http_urls}
+                customs={networkSettings.time_sync_http_custom}
+                onToggleBuiltin={(server, checked) => {
+                  const all = timeSyncServerOptions.http;
+                  const current =
+                    networkSettings.time_sync_http_urls == null ? [...all] : [...networkSettings.time_sync_http_urls];
+                  const next = checked
+                    ? [...current, server]
+                    : current.filter(s => s !== server);
+                  const value = next.length === all.length ? undefined : next;
+                  setNetworkSettings({ ...networkSettings, time_sync_http_urls: value });
+                }}
+                onAddCustom={server => {
+                  const customs = [...(networkSettings.time_sync_http_custom ?? []), { server, enabled: true }];
+                  setNetworkSettings({ ...networkSettings, time_sync_http_custom: customs });
+                }}
+                onToggleCustom={(index, enabled) => {
+                  const customs = (networkSettings.time_sync_http_custom ?? []).map((c, i) =>
+                    i === index ? { ...c, enabled } : c,
+                  );
+                  setNetworkSettings({ ...networkSettings, time_sync_http_custom: customs });
+                }}
+                onRemoveCustom={index => {
+                  const customs = (networkSettings.time_sync_http_custom ?? []).filter((_, i) => i !== index);
+                  setNetworkSettings({ ...networkSettings, time_sync_http_custom: customs.length ? customs : undefined });
+                }}
+                onReset={() => {
+                  setNetworkSettings({
+                    ...networkSettings,
+                    time_sync_http_urls: undefined,
+                    time_sync_http_custom: undefined,
+                  });
+                }}
+              />
+            )}
           </div>
 
           <div className="space-y-4">
