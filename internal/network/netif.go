@@ -346,6 +346,12 @@ func (s *NetworkInterfaceState) update() (DhcpTargetState, error) {
 			s.ipv4Addr = &ipv4Addresses[0]
 			changed = true
 		}
+	} else if s.ipv4Addr != nil {
+		// No address left on the interface: drop the stale pointer instead of
+		// keeping reporting an address that no longer exists.
+		s.l.Warn().Str("old_ipv4", s.ipv4Addr.String()).Msg("IPv4 address removed")
+		s.ipv4Addr = nil
+		changed = true
 	}
 	s.ipv4Addresses = ipv4AddressesString
 
@@ -370,6 +376,20 @@ func (s *NetworkInterfaceState) update() (DhcpTargetState, error) {
 			s.ipv6LinkLocal = ipv6LinkLocal
 			changed = true
 		}
+	} else if s.ipv6LinkLocal != nil {
+		s.l.Warn().Str("old_ipv6", s.ipv6LinkLocal.String()).Msg("IPv6 link local address removed")
+		s.ipv6LinkLocal = nil
+		changed = true
+	}
+	// Sort first so the primary IPv6 address picked below stays stable across
+	// polls instead of following whatever order netlink returns.
+	sortIPv6Addresses(ipv6Addresses)
+
+	if !isSameIPv6AddressList(s.ipv6Addresses, ipv6Addresses) {
+		s.l.Info().
+			Strs("ipv6_addresses", ipv6AddressStrings(ipv6Addresses)).
+			Msg("IPv6 addresses changed")
+		changed = true
 	}
 	s.ipv6Addresses = ipv6Addresses
 
@@ -387,6 +407,12 @@ func (s *NetworkInterfaceState) update() (DhcpTargetState, error) {
 			s.ipv6Addr = &ipv6Addresses[0].Address
 			changed = true
 		}
+	} else if s.ipv6Addr != nil {
+		// No global address left on the interface: drop the stale pointer instead
+		// of keeping reporting an address that no longer exists.
+		s.l.Warn().Str("old_ipv6", s.ipv6Addr.String()).Msg("IPv6 address removed")
+		s.ipv6Addr = nil
+		changed = true
 	}
 
 	// if it's the initial check, we'll set changed to false
