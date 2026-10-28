@@ -19,6 +19,7 @@ import { keyDisplayMap2, keys, modifiers, sKeyDisplayMap, latchingKeys } from "@
 import { dark_bg2_style} from "@/layout/theme_color";
 
 import GoBottomSvg from "@/assets/second/gobottom.svg?react";
+import { applyFormFactor } from "@/keyboardFormFactor";
 
 export const DetachIcon = ({ className }: { className?: string }) => {
   return <img src={DetachIconRaw} alt="Detach Icon" className={className} />;
@@ -35,14 +36,43 @@ function KeyboardWrapper() {
 
   const { sendKeyboardEvent, resetKeyboardState } = useKeyboard();
   const { selectedKeyboard } = useKeyboardLayout();
+  const keyboardFormFactor = useSettingsStore(state => state.keyboardFormFactor);
+
+  // The mobile keyboard is a fixed four-row layout, so it never runs the full
+  // applyFormFactor row rewrite. It only needs the extra keys each form factor
+  // brings: ISO adds IntlBackslash, JIS adds Yen/KeyRO and the IME toggles.
+  const formFactorIsJIS = keyboardFormFactor === "JIS";
+  const formFactorIsISO = keyboardFormFactor === "ISO";
 
   const keyDisplayMap = useMemo(() => {
-    return selectedKeyboard.keyDisplayMap;
+    // The layout's own map wins; the base map only fills in the keys a layout
+    // does not label itself (the ISO/JIS extra keys added below).
+    return { ...keyDisplayMap2, ...selectedKeyboard.keyDisplayMap };
   }, [selectedKeyboard]);
 
   const virtualKeyboardLayout = useMemo(() => {
-    return selectedKeyboard.virtualKeyboard;
-  }, [selectedKeyboard]);
+    const { main } = selectedKeyboard.virtualKeyboard;
+    return {
+      ...selectedKeyboard.virtualKeyboard,
+      main: {
+        ...main,
+        default: applyFormFactor(main.default, keyboardFormFactor, "default"),
+        // shift is optional on KeyboardLayoutObject: leave it absent when the
+        // layout has no shift row at all.
+        shift: main.shift
+          ? applyFormFactor(main.shift, keyboardFormFactor, "shift")
+          : main.shift,
+      },
+    };
+  }, [selectedKeyboard, keyboardFormFactor]);
+
+  const mobileImeRow = useMemo(() => {
+    const imeKeys = ["Henkan", "Muhenkan", "KatakanaHiragana", "Lang1", "Lang2"];
+    return virtualKeyboardLayout.main.default
+      .flatMap(row => row.split(" "))
+      .filter(key => imeKeys.includes(key))
+      .join(" ");
+  }, [virtualKeyboardLayout]);
 
   const [isDragging, setIsDragging] = useState(false);
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -82,6 +112,24 @@ function KeyboardWrapper() {
   const [useNum, setUseNum] = useState(false);
   const [useFn, setUseFn] = useState(false);
   const [stickyModifiers, setStickyModifiers] = useState<string[]>([]);
+  // Preserve the physical side for both reports and locked-button highlighting.
+  const [lockedModifierKeys, setLockedModifierKeys] = useState({
+    ctrl: "ControlLeft",
+    alt: "AltLeft",
+    meta: "MetaLeft",
+    shift: "ShiftLeft",
+  });
+
+  // Device truth for modifier state. Highlighting is derived from what the host
+  // reports rather than from what this client believes it sent.
+  const keysDownState = useHidStore(state => state.keysDownState);
+  const hostModifierButtons = useMemo(() => {
+    const modifier = keysDownState?.modifier ?? 0;
+    const pressed: string[] = [];
+    if (modifier & modifiers["ShiftLeft"]) pressed.push("ShiftLeft");
+    if (modifier & modifiers["ShiftRight"]) pressed.push("ShiftRight");
+    return pressed.join(" ");
+  }, [keysDownState?.modifier]);
   const modifierButtonTheme = useMemo(
     () => [{ class: "hg-mod-active", buttons: stickyModifiers.join(" ") }],
     [stickyModifiers],
@@ -89,11 +137,10 @@ function KeyboardWrapper() {
   const isCapsLockActive = useHidStore(useShallow(state => state.keyboardLedState?.caps_lock));
 
   // HID related states
-  const keyboardLedStateSyncAvailable = useHidStore(state => state.keyboardLedStateSyncAvailable);
   const keyboardLedSync = useSettingsStore(state => state.keyboardLedSync);
-  const isKeyboardLedManagedByHost = useMemo(() =>
-      keyboardLedSync !== "browser" && keyboardLedStateSyncAvailable,
-    [keyboardLedSync, keyboardLedStateSyncAvailable],
+  const isKeyboardLedManagedByHost = useMemo(
+    () => keyboardLedSync === "host",
+    [keyboardLedSync],
   );
 
   const setIsCapsLockActive = useHidStore(state => state.setIsCapsLockActive);
@@ -178,8 +225,11 @@ function KeyboardWrapper() {
       const keyHasShiftModifier = key.includes("(");
 
       // Check if this is a modifier key press
-      const isModifierKey = key === "ControlLeft" || key === "AltLeft" || key === "MetaLeft" || 
-                           key === "AltRight" || key === "MetaRight" || isKeyShift;
+      // Both sides: the left-only check used to drop ControlRight into the generic
+      // key path, where it has no usage in the keys table and sent nothing.
+      const isModifierKey = key === "ControlLeft" || key === "ControlRight" ||
+                           key === "AltLeft" || key === "AltRight" ||
+                           key === "MetaLeft" || key === "MetaRight" || isKeyShift;
 
       // Handle toggle of layout for shift or caps lock
       const toggleLayout = () => {
@@ -187,19 +237,21 @@ function KeyboardWrapper() {
       };
 
       // Handle modifier key press
-      if (key === "ControlLeft") {
+      if (key === "ControlLeft" || key === "ControlRight") {
         if (modifierLockMode) {
           // Lock mode: toggle lock state
+          setLockedModifierKeys(prev => ({ ...prev, ctrl: key }));
           setLockedModifiers(prev => ({ ...prev, ctrl: !prev.ctrl }));
         } else {
-          // Direct trigger mode: send key press and release immediately
-          sendKeyboardEvent([], [modifiers["ControlLeft"]]);
+          // Direct trigger mode: send the side that was pressed
+          sendKeyboardEvent([], [modifiers[key]]);
           setTimeout(resetKeyboardState, 100);
         }
         return;
       }
       if (key === "AltLeft" || key === "AltRight") {
         if (modifierLockMode) {
+          setLockedModifierKeys(prev => ({ ...prev, alt: key }));
           setLockedModifiers(prev => ({ ...prev, alt: !prev.alt }));
         } else {
           sendKeyboardEvent([], [modifiers[key]]);
@@ -209,6 +261,7 @@ function KeyboardWrapper() {
       }
       if (key === "MetaLeft" || key === "MetaRight") {
         if (modifierLockMode) {
+          setLockedModifierKeys(prev => ({ ...prev, meta: key }));
           setLockedModifiers(prev => ({ ...prev, meta: !prev.meta }));
         } else {
           sendKeyboardEvent([], [modifiers[key]]);
@@ -218,6 +271,10 @@ function KeyboardWrapper() {
       }
       if (isKeyShift) {
         if (modifierLockMode) {
+          setLockedModifierKeys(prev => ({
+            ...prev,
+            shift: key === "ShiftRight" ? "ShiftRight" : "ShiftLeft",
+          }));
           setLockedModifiers(prev => ({ ...prev, shift: !prev.shift }));
           if (lockedModifiers.shift) {
             // If unlocking shift, return to default layout
@@ -227,7 +284,8 @@ function KeyboardWrapper() {
             toggleLayout();
           }
         } else {
-          sendKeyboardEvent([], [modifiers["ShiftLeft"]]);
+          // Send the side that was actually pressed; {shift} falls back to left.
+          sendKeyboardEvent([], [modifiers[key] ?? modifiers["ShiftLeft"]]);
           setTimeout(resetKeyboardState, 100);
         }
         return;
@@ -286,16 +344,16 @@ function KeyboardWrapper() {
 
       // Add locked modifiers
       if (lockedModifiers.ctrl) {
-        newModifiers.push(modifiers["ControlLeft"]);
+        newModifiers.push(modifiers[lockedModifierKeys.ctrl]);
       }
       if (lockedModifiers.alt) {
-        newModifiers.push(modifiers["AltLeft"]);
+        newModifiers.push(modifiers[lockedModifierKeys.alt]);
       }
       if (lockedModifiers.meta) {
-        newModifiers.push(modifiers["MetaLeft"]);
+        newModifiers.push(modifiers[lockedModifierKeys.meta]);
       }
       if (lockedModifiers.shift && !isCapsLockActive) {
-        newModifiers.push(modifiers["ShiftLeft"]);
+        newModifiers.push(modifiers[lockedModifierKeys.shift]);
       }
 
       // Add shift modifier for keys with parentheses (if not caps lock and shift not locked)
@@ -323,17 +381,17 @@ function KeyboardWrapper() {
       }
       setTimeout(resetKeyboardState, 100);
     },
-    [isCapsLockActive, isKeyboardLedManagedByHost, sendKeyboardEvent, resetKeyboardState, setIsCapsLockActive, lockedModifiers, modifierLockMode],
+    [isCapsLockActive, isKeyboardLedManagedByHost, sendKeyboardEvent, resetKeyboardState, setIsCapsLockActive, lockedModifiers, lockedModifierKeys, modifierLockMode],
   );
 
   const virtualKeyboard = useHidStore(state => state.isVirtualKeyboardEnabled);
   const setVirtualKeyboard = useHidStore(state => state.setVirtualKeyboardEnabled);
 
   const modifierLockButtons = [
-    lockedModifiers.ctrl ? "ControlLeft" : "",
-    lockedModifiers.alt ? "AltLeft AltRight" : "",
-    lockedModifiers.meta ? "MetaLeft MetaRight" : "",
-    lockedModifiers.shift ? "ShiftLeft ShiftRight" : "",
+    lockedModifiers.ctrl ? lockedModifierKeys.ctrl : "",
+    lockedModifiers.alt ? lockedModifierKeys.alt : "",
+    lockedModifiers.meta ? lockedModifierKeys.meta : "",
+    lockedModifiers.shift ? lockedModifierKeys.shift : "",
   ].filter(Boolean).join(" ").trim();
   
   return (
@@ -427,6 +485,7 @@ function KeyboardWrapper() {
                         layoutName={layoutName}
                         buttonTheme={[
                           ...(stickyModifiers.length ? [{ class: "hg-mod-active", buttons: stickyModifiers.join(" ") }] : []),
+                          ...(hostModifierButtons ? [{ class: "hg-mod-active", buttons: hostModifierButtons }] : []),
                           ...(modifierLockMode && modifierLockButtons ? [{ class: "modifier-locked", buttons: modifierLockButtons }] : [])
                         ]}
                         onKeyPress={(key: string) => {
@@ -510,13 +569,13 @@ function KeyboardWrapper() {
                                 layout={{
                                   default: [
                                     useFn
-                                      ? "Fn Backquote F11 F12 BracketLeft BracketRight Backslash"
-                                      : "Fn Backquote Minus Equal BracketLeft BracketRight Backslash",
+                                      ? `Fn Backquote F11 F12 BracketLeft BracketRight Backslash${formFactorIsJIS ? " Yen" : ""}`
+                                      : `Fn Backquote Minus Equal BracketLeft BracketRight Backslash${formFactorIsJIS ? " Yen" : ""}`,
                                   ],
                                   shift: [
                                     useFn
-                                      ? "Fn Backquote F11 F12 BracketLeft BracketRight Backslash"
-                                      : "Fn (Backquote) (Minus) (Equal) (BracketLeft) (BracketRight) (Backslash)",
+                                      ? `Fn Backquote F11 F12 BracketLeft BracketRight Backslash${formFactorIsJIS ? " Yen" : ""}`
+                                      : `Fn (Backquote) (Minus) (Equal) (BracketLeft) (BracketRight) (Backslash)${formFactorIsJIS ? " (Yen)" : ""}`,
                                   ],
                                 }}
 
@@ -663,11 +722,11 @@ function KeyboardWrapper() {
                                 layout={{
                                   default: [
 
-                                    "ShiftLeft KeyZ KeyX KeyC KeyV KeyB KeyN KeyM Backspace",
+                                    `ShiftLeft${formFactorIsISO ? " IntlBackslash" : ""} KeyZ KeyX KeyC KeyV KeyB KeyN KeyM Backspace${formFactorIsJIS ? " KeyRO" : ""}`,
                                   ],
                                   shift: [
 
-                                    "ShiftLeft (KeyZ) (KeyX) (KeyC) (KeyV) (KeyB) (KeyN) (KeyM) Backspace",
+                                    `ShiftLeft${formFactorIsISO ? " (IntlBackslash)" : ""} (KeyZ) (KeyX) (KeyC) (KeyV) (KeyB) (KeyN) (KeyM) Backspace${formFactorIsJIS ? " (KeyRO)" : ""}`,
                                   ],
                                 }}
 
@@ -694,7 +753,28 @@ function KeyboardWrapper() {
                                     ],
                                   }} />
                               </div>
-                              <div className={"w-3/5"}>
+                              {formFactorIsJIS && (
+                                <div className={"w-1/4"}>
+                                  <Keyboard
+                                    baseClass="simple-keyboard-main2"
+                                    layoutName={layoutName}
+                                    onKeyPress={onKeyDown}
+                                    display={keyDisplayMap}
+                                    layout={{
+                                      default: [
+                                        mobileImeRow,
+                                      ],
+                                      shift: [
+                                        mobileImeRow,
+                                      ],
+                                    }}
+                                    disableButtonHold={true}
+                                    syncInstanceInputs={true}
+                                    debug={false}
+                                  />
+                                </div>
+                              )}
+                              <div className={formFactorIsJIS ? "flex-1" : "w-3/5"}>
                                 <Keyboard
                                   baseClass="simple-keyboard-main2"
                                   layoutName={layoutName}

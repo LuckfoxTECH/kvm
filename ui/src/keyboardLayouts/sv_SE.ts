@@ -165,11 +165,19 @@ export const chars = {
   Tab: { key: "Tab" },
 } as Record<string, KeyCombo>;
 
+// The ISO extra key left of Z prints < and > on this layout; the shared map only
+// knows the UK spelling.
+const sv_SE_keyDisplayMap = {
+  ...keyDisplayMap,
+  IntlBackslash: "<",
+  "(IntlBackslash)": ">",
+};
+
 export const sv_SE: KeyboardLayout = {
   isoCode,
   name,
   chars,
-  keyDisplayMap,
+  keyDisplayMap: sv_SE_keyDisplayMap,
   modifierDisplayMap,
   virtualKeyboard,
 };

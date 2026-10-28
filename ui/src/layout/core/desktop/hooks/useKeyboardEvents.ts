@@ -3,8 +3,52 @@ import { useCallback } from "react";
 import  useKeyboard  from "@/hooks/useKeyboard";
 import { useHidStore, useSettingsStore, useUiStore } from "@/hooks/stores";
 import { keys, modifiers } from "@/keyboardMappings";
-import { keyboards } from "@/keyboardLayouts";
 import { eventMatchesShortcut } from "@/utils/shortcuts";
+
+// getAdjustedKeyCode normalises the browser's physical key code before it is
+// looked up in the usage table. The browser reports ISO/JIS positions under
+// their own names (IntlYen, IntlRo, Convert, NonConvert) while keyboardMappings
+// keys them as Yen, KeyRO, Henkan, Muhenkan. Without this step those keys
+// resolve to undefined and the filter(Boolean) below silently drops the whole
+// report, so a real JIS keyboard produces nothing for yen, ro, convert or
+// non-convert.
+//
+// appleImeKeys switches the two IME positions between the Apple and the Windows
+// spellings: an Apple JIS keyboard labels them 英数 / かな and sends LANG2 (0x91)
+// / LANG1 (0x90), while a Windows JIS keyboard labels the same positions 無変換 /
+// ひらがな and sends Muhenkan (0x8b) / KatakanaHiragana (0x88). Both report the
+// same browser codes, so the target usage has to follow the selected layout.
+function getAdjustedKeyCode(e: KeyboardEvent, appleImeKeys: boolean) {
+  const key = e.key;
+  let code = e.code;
+
+  // the same physical position is reported under two codes depending on the
+  // layout: ISO/UK says IntlBackslash where US says Backquote
+  if (code == "IntlBackslash" && ["`", "~"].includes(key)) {
+    code = "Backquote";
+  } else if (code == "Backquote" && ["§", "±"].includes(key)) {
+    code = "IntlBackslash";
+  }
+  // Japanese 106/109
+  else if (code === "IntlYen") {
+    code = "Yen";
+  } else if (code === "IntlRo") {
+    code = "KeyRO";
+  } else if (code === "Convert") {
+    code = "Henkan";
+  } else if (code === "NonConvert") {
+    code = appleImeKeys ? "Lang2" : "Muhenkan";
+  }
+  // The kana position. UI Events calls it KanaMode and macOS-derived browsers
+  // report Kana; neither exists in the usage table, so without this branch
+  // keys[code] is undefined and filter(Boolean) drops the whole report -- which
+  // is why the kana key looked dead and never showed up in the info bar.
+  else if (code === "KanaMode" || code === "Kana") {
+    code = appleImeKeys ? "Lang1" : "KatakanaHiragana";
+  }
+
+  return code;
+}
 
 export const useKeyboardEvents = (
   pasteCaptureRef?: React.RefObject<HTMLTextAreaElement>,
@@ -13,34 +57,14 @@ export const useKeyboardEvents = (
   const { sendKeyboardEvent, resetKeyboardState } = useKeyboard();
   const { setIsNumLockActive, setIsCapsLockActive, setIsScrollLockActive } = useHidStore();
 
-  const keyboardLedStateSyncAvailable = useHidStore(state => state.keyboardLedStateSyncAvailable);
   const keyboardLedSync = useSettingsStore(state => state.keyboardLedSync);
-  const isKeyboardLedManagedByHost = keyboardLedSync !== "browser" && keyboardLedStateSyncAvailable;
+  const isKeyboardLedManagedByHost = keyboardLedSync === "host";
   const pasteShortcutEnabled = useSettingsStore(state => state.pasteShortcutEnabled);
   const pasteShortcut = useSettingsStore(state => state.pasteShortcut);
   const isOcrMode = useUiStore(state => state.isOcrMode);
   const keyboardLayout = useSettingsStore(state => state.keyboardLayout);
-
-  const remapCode = useCallback((code: string, key: string): string => {
-    const modifierCodes = ["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight", "AltLeft", "AltRight", "MetaLeft", "MetaRight", "CapsLock", "Tab", "Enter", "Backspace", "Delete", "Insert", "Home", "End", "PageUp", "PageDown", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Escape", "F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "PrintScreen", "ScrollLock", "Pause", "ContextMenu", "Menu"];
-    if (modifierCodes.includes(code)) return code;
-    if (code.startsWith("Digit") || code.startsWith("Numpad")) return code;
-    if (code.startsWith("Key") && code.length === 4) {
-      const letter = code.charAt(3);
-      if (letter >= "A" && letter <= "Z") {
-        const isoCode = (keyboardLayout || "en-US").replace("_", "-");
-        const layout = keyboards.find(k => k.isoCode === isoCode);
-        if (layout && layout.chars) {
-          const charLower = key.toLowerCase();
-          const charEntry = layout.chars[charLower] || layout.chars[key];
-          if (charEntry && charEntry.key && typeof charEntry.key === "string" && charEntry.key !== code) {
-            return charEntry.key;
-          }
-        }
-      }
-    }
-    return code;
-  }, [keyboardLayout]);
+  const appleImeKeys =
+    String(keyboardLayout ?? "").replace(/_/g, "-").toLowerCase() === "ja-jp-mac";
 
   const handleModifierKeys = useCallback((e: KeyboardEvent, activeModifiers: number[]) => {
     const { shiftKey, ctrlKey, altKey, metaKey } = e;
@@ -49,7 +73,7 @@ export const useKeyboardEvents = (
     return filteredModifiers
       .filter(modifier => shiftKey || (modifier !== modifiers["ShiftLeft"] && modifier !== modifiers["ShiftRight"]))
       .filter(modifier => ctrlKey || (modifier !== modifiers["ControlLeft"] && modifier !== modifiers["ControlRight"]))
-      .filter(modifier => altKey || modifier !== modifiers["AltLeft"])
+      .filter(modifier => altKey || (modifier !== modifiers["AltLeft"] && modifier !== modifiers["AltRight"]))
       .filter(modifier => metaKey || (modifier !== modifiers["MetaLeft"] && modifier !== modifiers["MetaRight"]));
   }, []);
 
@@ -72,8 +96,7 @@ export const useKeyboardEvents = (
 
     e.preventDefault();
     const prev = useHidStore.getState();
-    let code = e.code;
-    const key = e.key;
+    const code = getAdjustedKeyCode(e, appleImeKeys);
 
     if (!isKeyboardLedManagedByHost) {
       setIsNumLockActive(e.getModifierState("NumLock"));
@@ -81,34 +104,35 @@ export const useKeyboardEvents = (
       setIsScrollLockActive(e.getModifierState("ScrollLock"));
     }
 
-    if (code == "IntlBackslash" && ["`", "~"].includes(key)) {
-      code = "Backquote";
-    } else if (code == "Backquote" && ["§", "±"].includes(key)) {
-      code = "IntlBackslash";
-    }
-
-    code = remapCode(code, key);
-
     const newKeys = [...prev.activeKeys, keys[code]].filter(Boolean);
+    // A key whose browser code has no usage-table entry is dropped by
+    // filter(Boolean) above and the whole report silently disappears, which is
+    // indistinguishable from "the device is broken" in the UI. Surface it.
+    if (keys[code] === undefined) {
+      console.warn(
+        `[keyboard] unknown key code "${code}" (key="${e.key}") - report dropped`,
+      );
+    }
     const newModifiers = handleModifierKeys(e, [...prev.activeModifiers, modifiers[code]]);
 
     if (e.metaKey) {
       setTimeout(() => {
         const prev = useHidStore.getState();
-        sendKeyboardEvent([], newModifiers || prev.activeModifiers);
+        sendKeyboardEvent([], newModifiers || prev.activeModifiers, true);
       }, 10);
     }
 
     sendKeyboardEvent([...new Set(newKeys)], [...new Set(newModifiers)]);
-  }, [handleModifierKeys, remapCode, sendKeyboardEvent, isKeyboardLedManagedByHost, setIsNumLockActive, setIsCapsLockActive, setIsScrollLockActive, pasteShortcutEnabled, pasteShortcut, pasteCaptureRef, isReinitializingGadget, isOcrMode]);
+  }, [handleModifierKeys, sendKeyboardEvent, isKeyboardLedManagedByHost, setIsNumLockActive, setIsCapsLockActive, setIsScrollLockActive, pasteShortcutEnabled, pasteShortcut, pasteCaptureRef, isReinitializingGadget, isOcrMode, appleImeKeys]);
 
   const keyUpHandler = useCallback((e: KeyboardEvent) => {
     if (isOcrMode) return;
     if (isReinitializingGadget) return;
     e.preventDefault();
     const prev = useHidStore.getState();
-    const key = e.key;
-    let code = remapCode(e.code, key);
+    // the same normalisation as keydown, otherwise a key pressed under its raw
+    // code is looked up and released under its normalised one
+    const code = getAdjustedKeyCode(e, appleImeKeys);
 
     if (!isKeyboardLedManagedByHost) {
       setIsNumLockActive(e.getModifierState("NumLock"));
@@ -122,8 +146,10 @@ export const useKeyboardEvents = (
       prev.activeModifiers.filter(k => k !== modifiers[code]),
     );
 
-    sendKeyboardEvent([...new Set(newKeys)], [...new Set(newModifiers)]);
-  }, [handleModifierKeys, remapCode, sendKeyboardEvent, isKeyboardLedManagedByHost, setIsNumLockActive, setIsCapsLockActive, setIsScrollLockActive, isOcrMode, isReinitializingGadget]);
+    // Always forced: a release that gets swallowed leaves the key latched on
+    // the host, which then auto-repeats it.
+    sendKeyboardEvent([...new Set(newKeys)], [...new Set(newModifiers)], true);
+  }, [handleModifierKeys, sendKeyboardEvent, isKeyboardLedManagedByHost, setIsNumLockActive, setIsCapsLockActive, setIsScrollLockActive, isOcrMode, isReinitializingGadget, appleImeKeys]);
 
   const setupKeyboardEvents = useCallback(() => {
     const abortController = new AbortController();

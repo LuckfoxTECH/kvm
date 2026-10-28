@@ -10,7 +10,7 @@ import { SettingsItem } from "@components/Settings/SettingsView";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import { useHidStore, useRTCStore, useUiStore, useSettingsStore, useVideoStore } from "@/hooks/stores";
 import { keys, modifiers } from "@/keyboardMappings";
-import { layouts, chars } from "@/keyboardLayouts";
+import { layouts, chars, resolveKeyboardLayoutKey } from "@/keyboardLayouts";
 import notifications from "@/notifications";
 import { eventMatchesShortcut, shortcutFromKeyboardEvent } from "@/utils/shortcuts";
 
@@ -65,9 +65,7 @@ export default function Clipboard() {
 
   // this ensures we always get the original en_US if it hasn't been set yet
   const safeKeyboardLayout = useMemo(() => {
-    if (keyboardLayout && keyboardLayout.length > 0)
-      return keyboardLayout;
-    return "en_US";
+    return resolveKeyboardLayoutKey(keyboardLayout) ?? "en_US";
   }, [keyboardLayout]);
 
   useEffect(() => {

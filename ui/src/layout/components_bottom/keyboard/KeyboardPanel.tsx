@@ -6,10 +6,16 @@ import { CloseOutlined } from '@ant-design/icons';
 import { useReactAt } from "i18n-auto-extractor/react";
 
 import ScrollThrottlingSelect, { Option } from "@components/ScrollThrottlingSelect";
-import { layouts, keyboards } from "@/keyboardLayouts";
-import { KeyboardLedSync, useSettingsStore } from "@/hooks/stores";
+import { layouts, keyboards, resolveKeyboardLayoutKey } from "@/keyboardLayouts";
+import { KeyboardLedSync, useHidStore, useSettingsStore } from "@/hooks/stores";
+import {
+  keyboardFormFactorOptions,
+  isKeyboardFormFactor,
+  type KeyboardFormFactor,
+} from "@/keyboardFormFactor";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import notifications from "@/notifications";
+import KeyboardLedStatusRow from "@/layout/components_bottom/keyboard/KeyboardLedStatusRow";
 import KeyboardLayoutModal, { KeyboardLayoutContent } from "@/layout/components_bottom/keyboard/KeyboardLayoutModal";
 import { dark_bg2_style, dark_font_style, dark_bd_style, dark_line_style } from "@/layout/theme_color";
 import { useThemeSettings } from "@routes/login_page/useLocalAuth";
@@ -21,9 +27,19 @@ const KeyboardPanel: React.FC = () => {
   const [showMore, setShowMore] = useState(false);
   const keyboardLayout = useSettingsStore(state => state.keyboardLayout);
   const setKeyboardLayout = useSettingsStore(state => state.setKeyboardLayout);
+  const keyboardFormFactor = useSettingsStore(state => state.keyboardFormFactor);
+  const setKeyboardFormFactor = useSettingsStore(state => state.setKeyboardFormFactor);
 
   const [layoutOptions, setLayoutOptions] = useState<Option[]>();
   const [maxShowCount, setMaxShowCount] = useState(3);
+
+  // The select lists underscored keys ("ja_JP-mac") while the stored value may
+  // be in either spelling; resolve it so the dropdown preselects the active
+  // layout instead of silently showing the first option. Declared before the
+  // effect that depends on it.
+  const safeKeyboardLayout = useMemo(() => {
+    return resolveKeyboardLayoutKey(keyboardLayout) ?? "en_US";
+  }, [keyboardLayout]);
 
   const layoutAbbrevMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -41,12 +57,7 @@ const KeyboardPanel: React.FC = () => {
         label: `${language} (${layoutAbbrevMap[code] || code})`,
       }));
 
-      const currentLayout = keyboardLayout ?? "";
-      if (!currentLayout) {
-        return options;
-      }
-
-      const currentIndex = options.findIndex(option => option.value === currentLayout);
+      const currentIndex = options.findIndex(option => option.value === safeKeyboardLayout);
       if (currentIndex === -1 || currentIndex < 3) {
         setMaxShowCount(3);
         return options;
@@ -57,20 +68,21 @@ const KeyboardPanel: React.FC = () => {
       return options;
     })();
     setLayoutOptions(curLayoutOptions);
-  }, [layouts, keyboardLayout, layoutAbbrevMap]);
-
-  const safeKeyboardLayout = useMemo(() => {
-    if (keyboardLayout && keyboardLayout.length > 0)
-      return keyboardLayout;
-    return "en_US";
-  }, [keyboardLayout]);
+  }, [layouts, safeKeyboardLayout, layoutAbbrevMap]);
 
   const [send] = useJsonRpc();
+  const resetKeyboardLedTruth = useHidStore(state => state.resetKeyboardLedTruth);
 
   useEffect(() => {
     send("getKeyboardLayout", {}, resp => {
       if ("error" in resp) return;
       setKeyboardLayout(resp.result as string);
+    });
+    // The form factor is a separate setting: layouts choose the characters, the
+    // form factor chooses which keys exist.
+    send("getKeyboardFormFactor", {}, resp => {
+      if ("error" in resp) return;
+      if (isKeyboardFormFactor(resp.result)) setKeyboardFormFactor(resp.result);
     });
   }, []);
 
@@ -89,34 +101,51 @@ const KeyboardPanel: React.FC = () => {
     [send, setKeyboardLayout],
   );
 
+  const onKeyboardFormFactorChange = useCallback(
+    (value: string[] | string) => {
+      const formFactor = value as KeyboardFormFactor;
+      send("setKeyboardFormFactor", { formFactor }, resp => {
+        if ("error" in resp) {
+          notifications.error(
+            `Failed to set keyboard form factor: ${resp.error.data || "Unknown error"}`,
+          );
+          return;
+        }
+        setKeyboardFormFactor(formFactor);
+      });
+    },
+    [send, setKeyboardFormFactor],
+  );
+
+  const formFactorOptions: Option[] = useMemo(
+    () => keyboardFormFactorOptions.map(o => ({ value: o.value, label: o.label })),
+    [],
+  );
+
   const keysOptionsList: Option[] = [
     { label: "Show Pressed Keys", value: "show-pressed-keys" },
   ];
 
   const showPressedKeys = useSettingsStore(state => state.showPressedKeys);
   const setShowPressedKeys = useSettingsStore(state => state.setShowPressedKeys);
-  const [keysOptions, setKeysOptions] = useState<string[]>(["show-pressed-keys"]);
+  const [keysOptions, setKeysOptions] = useState<string[]>([]);
 
+  // The toggle is rendered as a multi-select, so the option list has to mirror the
+  // stored setting rather than hold its own state.
   useEffect(() => {
-    if (showPressedKeys) {
-      setKeysOptions((prevItems: string[]) => [...prevItems, "show-pressed-keys"]);
-    } else {
-      setKeysOptions((prevItems) => prevItems.filter(item => item !== "show-pressed-keys"));
-    }
+    const selected: string[] = [];
+    if (showPressedKeys) selected.push("show-pressed-keys");
+    setKeysOptions(selected);
   }, [showPressedKeys]);
 
   const handleShowPressedChange = (data: string[] | string) => {
-    if (data.includes("show-pressed-keys")) {
-      setShowPressedKeys(true);
-    } else {
-      setShowPressedKeys(false);
-    }
+    const selected = Array.isArray(data) ? data : [data];
+    setShowPressedKeys(selected.includes("show-pressed-keys"));
   };
 
   const ledSyncOptions: Option[] = [
-    { value: "auto", label: "Auto" },
-    { value: "browser", label: "Browser Only" },
     { value: "host", label: "Host Only" },
+    { value: "browser", label: "Browser Only" },
   ];
 
   const keyboardLedSync = useSettingsStore(state => state.keyboardLedSync);
@@ -128,7 +157,18 @@ const KeyboardPanel: React.FC = () => {
   }, [keyboardLedSync]);
 
   const handleLedChange = (data: string[] | string) => {
-    setKeyboardLedSync(data as KeyboardLedSync);
+    const next = data as KeyboardLedSync;
+    if (next === useSettingsStore.getState().keyboardLedSync) return;
+
+    setKeyboardLedSync(next);
+    // Whatever the previous source believed is not an answer for the new one. In
+    // practice this is what made host mode look like it had already reported:
+    // the browser path stamps reported=true, so its CapsLock survived the switch
+    // and was drawn as host truth until the host pushed its first LED report.
+    resetKeyboardLedTruth();
+
+    // The layout's query effect reruns on source changes and rejects stale
+    // responses. Browser state stays unknown until its next local sample.
   };
 
   const DividerLine = ({isMobile = false}: {isMobile?: boolean}) => {
@@ -171,6 +211,9 @@ const KeyboardPanel: React.FC = () => {
           flex flex-col w-full mx-auto
           ${isDark ? 'text-white' : 'text-black'}
         `}>
+          {/* Keyboard LEDs + active layout head the drawer. */}
+          <KeyboardLedStatusRow />
+
           {/* LED State Synchronization */}
           <div className="px-[20px] pt-4">
             <ScrollThrottlingSelect
@@ -196,6 +239,19 @@ const KeyboardPanel: React.FC = () => {
               specialOptionText="More"
               specialOptionIcon={<LeftSVG />}
               onSpecialOptionClick={() => setShowMore(true)}
+            />
+          </div>
+
+          <DividerLine isMobile={true} />
+
+          {/* Keyboard Form Factor (ANSI / ISO / JIS) */}
+          <div className="px-[20px]">
+            <ScrollThrottlingSelect
+              mode="single"
+              title={$at("Keyboard Form Factor")}
+              options={formFactorOptions}
+              value={keyboardFormFactor}
+              onChange={onKeyboardFormFactorChange}
             />
           </div>
 
@@ -238,6 +294,15 @@ const KeyboardPanel: React.FC = () => {
           specialOptionText="More"
           specialOptionIcon={<LeftSVG />}
           onSpecialOptionClick={() => setShowMore(true)}
+        />
+
+        <DividerLine />
+        <ScrollThrottlingSelect
+          mode="single"
+          title={$at("Keyboard Form Factor")}
+          options={formFactorOptions}
+          value={keyboardFormFactor}
+          onChange={onKeyboardFormFactorChange}
         />
 
         <DividerLine />

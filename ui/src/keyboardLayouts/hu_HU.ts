@@ -160,6 +160,7 @@ const keyDisplayMap = {
   Quote: "é",
   Backslash: "ú",
   IntlBackslash: "í",
+  "(IntlBackslash)": "Í",
   KeyY: "Z",
   KeyZ: "Y",
 } as Record<string, string>;

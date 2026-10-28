@@ -766,8 +766,13 @@ export const useHidStore = create<HidState>((set, get) => ({
   altGrCtrlTime: 0,
   setAltGrCtrlTime: time => set({ altGrCtrlTime: time }),
 
-  setKeyboardLedState: ledState => set({ keyboardLedState: ledState }),
+  setKeyboardLedState: ledState => {
+    // Device pushes and query responses cannot supply browser-mode truth.
+    if (useSettingsStore.getState().keyboardLedSync !== "host") return;
+    set({ keyboardLedState: ledState });
+  },
   setIsNumLockActive: active => {
+    if (useSettingsStore.getState().keyboardLedSync !== "browser") return;
     const keyboardLedState = { ...(get().keyboardLedState || defaultKeyboardLedState) };
     keyboardLedState.num_lock = active;
     // The browser now holds local truth for the lamps, so stop rendering them as
@@ -776,12 +781,14 @@ export const useHidStore = create<HidState>((set, get) => ({
     set({ keyboardLedState });
   },
   setIsCapsLockActive: active => {
+    if (useSettingsStore.getState().keyboardLedSync !== "browser") return;
     const keyboardLedState = { ...(get().keyboardLedState || defaultKeyboardLedState) };
     keyboardLedState.caps_lock = active;
     keyboardLedState.reported = true;
     set({ keyboardLedState });
   },
   setIsScrollLockActive: active => {
+    if (useSettingsStore.getState().keyboardLedSync !== "browser") return;
     const keyboardLedState = { ...(get().keyboardLedState || defaultKeyboardLedState) };
     keyboardLedState.scroll_lock = active;
     keyboardLedState.reported = true;

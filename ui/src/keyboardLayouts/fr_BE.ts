@@ -170,6 +170,9 @@ export const chars = {
 
 const fr_BE_keyDisplayMap = {
   ...keyDisplayMap,
+  // ISO extra key left of Z: Belgian layouts print < and > on it.
+  IntlBackslash: "<",
+  "(IntlBackslash)": ">",
   KeyA: "q",
   KeyQ: "a",
   KeyW: "z",

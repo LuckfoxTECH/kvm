@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import { useSettingsStore, useHidStore, useUiStore } from "@/hooks/stores";
 import { keys, modifiers } from "@/keyboardMappings";
-import { chars } from "@/keyboardLayouts";
+import { chars, resolveKeyboardLayoutKey } from "@/keyboardLayouts";
 import notifications from "@/notifications";
 import { eventMatchesShortcut } from "@/utils/shortcuts";
 
@@ -25,11 +25,8 @@ export const usePasteHandler = (pasteCaptureRef?: React.RefObject<HTMLTextAreaEl
     console.debug("[override-ctrlv]", ...args);
   }, [debugMode]);
 
-  const normalizedKeyboardLayout = (keyboardLayout || "").replace("-", "_");
-  const safeKeyboardLayout =
-    normalizedKeyboardLayout && normalizedKeyboardLayout.length > 0 && chars[normalizedKeyboardLayout]
-      ? normalizedKeyboardLayout
-      : "en_US";
+  const normalizedKeyboardLayout = resolveKeyboardLayoutKey(keyboardLayout);
+  const safeKeyboardLayout = normalizedKeyboardLayout ?? "en_US";
 
   const restoreFocusTrapNow = useCallback(() => {
     if (focusTrapRestoreTimerRef.current !== null) {
