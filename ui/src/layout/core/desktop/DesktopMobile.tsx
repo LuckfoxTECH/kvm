@@ -37,7 +37,8 @@ import SettingsMacros from "@/layout/components_side/Macros";
 import { useTouchZoom } from "@/layout/core/desktop/hooks/useTouchZoom";
 import { usePasteHandler } from "@/layout/core/desktop/hooks/usePasteHandler";
 import UsbEpModeSelect from "@/layout/components_bottom/usbepmode/UsbEpModeSelect";
-import UsbStatusPanel from "@/layout/components_bottom/usb_status/UsbStatusPanel";
+import { RemoteStatusPanelConnected } from "@/layout/core/bar_bottom/RemoteStatusPanel";
+import { HdmiStatusPanelConnected } from "@/layout/core/bar_bottom/HdmiStatusPanel";
 import VirtualMediaSource from "@/layout/components_side/VirtualMediaSource";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import OcrOverlay from "@components/OcrOverlay";
@@ -118,7 +119,7 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
   const mouseY = useMouseStore(state => state.mouseY);
   const allowTapToOpenVirtualKeyboard = useHidStore(state => state.allowTapToOpenVirtualKeyboard);
   const setAllowTapToOpenVirtualKeyboard = useHidStore(state => state.setAllowTapToOpenVirtualKeyboard);
-  const [send, sendNotification] = useJsonRpc();
+  const [send] = useJsonRpc();
   const [leftBtnPos, setLeftBtnPos] = useState({ x: 40, y: 40 });
   const [rightBtnPos, setRightBtnPos] = useState({ x: 120, y: 40 });
   const [wheelPos, setWheelPos] = useState({ x: 184, y: 140 });
@@ -217,7 +218,7 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
     if (mouseMode === "relative") {
       mouseEvents.sendVirtualRelativeMovement(0, 0, newButtons);
     } else {
-      sendNotification("absMouseReport", { x: lastAbsPosRef.current.x, y: lastAbsPosRef.current.y, buttons: newButtons });
+      mouseEvents.sendAbsMouseMovement(lastAbsPosRef.current.x, lastAbsPosRef.current.y, newButtons);
     }
   };
   
@@ -238,7 +239,7 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
      if (mouseMode === "relative") {
        mouseEvents.sendVirtualRelativeMovement(0, 0, newButtons);
      } else {
-       sendNotification("absMouseReport", { x: lastAbsPosRef.current.x, y: lastAbsPosRef.current.y, buttons: newButtons });
+       mouseEvents.sendAbsMouseMovement(lastAbsPosRef.current.x, lastAbsPosRef.current.y, newButtons);
      }
   };
 
@@ -427,15 +428,23 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
         drawerRender={() => (<MousePanel/>)}
       />
       <EnhancedDrawer
+        title={$at("USB")}
         targetView={"UsbEpModeSelect"}
         placement={"bottom"}
         drawerRender={() => (<UsbEpModeSelect/>)}
-        className={"px-[20px]"}
       />
       <EnhancedDrawer
-        targetView={"UsbStatusPanel"}
+        title={$at("HDMI")}
+        targetView={"HdmiStatus"}
         placement={"bottom"}
-        drawerRender={() => (<UsbStatusPanel/>)}
+        drawerRender={() => (<HdmiStatusPanelConnected/>)}
+      />
+
+      <EnhancedDrawer
+        title={$at("Remote Access")}
+        targetView={"RemoteStatus"}
+        placement={"bottom"}
+        drawerRender={() => (<RemoteStatusPanelConnected/>)}
       />
 
       <EnhancedDrawer
@@ -730,7 +739,7 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
                               "flex h-8 w-8 items-center justify-center rounded-full text-white text-xs active:scale-90 transition-transform duration-100",
                               isDark ? "bg-gray-500/70" : "bg-black/30",
                             )}
-                            onClick={() => { send("wheelReport", { wheelY: 1, mouseMode }); }}
+                            onClick={() => { send("wheelReport", { wheelY: 1, wheelX: 0 }); }}
                           >
                             ▲
                           </div>
@@ -755,7 +764,7 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
                               "mt-1 flex h-8 w-8 items-center justify-center rounded-full text-white text-xs active:scale-90 transition-transform duration-100",
                               isDark ? "bg-gray-500/70" : "bg-black/30",
                             )}
-                            onClick={() => { send("wheelReport", { wheelY: -1, mouseMode }); }}
+                            onClick={() => { send("wheelReport", { wheelY: -1, wheelX: 0 }); }}
                           >
                             ▼
                           </div>

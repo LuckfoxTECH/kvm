@@ -33,7 +33,9 @@ import {
   useSettingsStore,
   BacklightSettings,
  useVpnStore } from "@/hooks/stores";
+import { applyVideoInputState, type VideoInputStatePayload } from "@/hooks/videoInputState";
 import { JsonRpcRequest, useJsonRpc, resetHttpSessionId } from "@/hooks/useJsonRpc";
+import { doRpcHidHandshake } from "@/hooks/useHidRpc";
 import api from "@/api";
 import Modal from "@components/Modal";
 import { useDeviceUiNavigation } from "@/hooks/useAppNavigation";
@@ -110,6 +112,12 @@ export default function MobileHome() {
   const setPeerConnection = useRTCStore(state => state.setPeerConnection);
   const setDiskChannel = useRTCStore(state => state.setDiskChannel);
   const setRpcDataChannel = useRTCStore(state => state.setRpcDataChannel);
+  const setRpcHidChannel = useRTCStore(state => state.setRpcHidChannel);
+  const setRpcHidUnreliableChannel = useRTCStore(state => state.setRpcHidUnreliableChannel);
+  const setRpcHidUnreliableNonOrderedChannel = useRTCStore(
+    state => state.setRpcHidUnreliableNonOrderedChannel,
+  );
+  const setRpcHidProtocolVersion = useRTCStore(state => state.setRpcHidProtocolVersion);
   const setTransceiver = useRTCStore(state => state.setTransceiver);
   const setAudioTransceiver = useRTCStore(state => state.setAudioTransceiver);
   const location = useLocation();
@@ -119,6 +127,7 @@ export default function MobileHome() {
   const [connectionFailed, setConnectionFailed] = useState(false);
 
   const forceHttp = useSettingsStore(state => state.forceHttp);
+  const keyboardLedSync = useSettingsStore(state => state.keyboardLedSync);
   
   const { setOtaState } = useUpdateStore();
   const [isFullscreen, setIsFullscreen] = useState(0);
@@ -602,6 +611,35 @@ export default function MobileHome() {
       setRpcDataChannel(rpcDataChannel);
     };
 
+    // Binary HID RPC channels, see index.pc.tsx for the channel roles.
+    const rpcHidChannel = pc.createDataChannel("hidrpc");
+    rpcHidChannel.binaryType = "arraybuffer";
+    rpcHidChannel.onopen = () => {
+      setRpcHidChannel(rpcHidChannel);
+    };
+    doRpcHidHandshake(rpcHidChannel, setRpcHidProtocolVersion);
+
+    const rpcHidUnreliableChannel = pc.createDataChannel("hidrpc-unreliable-ordered", {
+      ordered: true,
+      maxRetransmits: 0,
+    });
+    rpcHidUnreliableChannel.binaryType = "arraybuffer";
+    rpcHidUnreliableChannel.onopen = () => {
+      setRpcHidUnreliableChannel(rpcHidUnreliableChannel);
+    };
+
+    const rpcHidUnreliableNonOrderedChannel = pc.createDataChannel(
+      "hidrpc-unreliable-nonordered",
+      {
+        ordered: false,
+        maxRetransmits: 0,
+      },
+    );
+    rpcHidUnreliableNonOrderedChannel.binaryType = "arraybuffer";
+    rpcHidUnreliableNonOrderedChannel.onopen = () => {
+      setRpcHidUnreliableNonOrderedChannel(rpcHidUnreliableNonOrderedChannel);
+    };
+
     const diskDataChannel = pc.createDataChannel("disk");
     diskDataChannel.onopen = () => {
       setDiskChannel(diskDataChannel);
@@ -621,6 +659,10 @@ export default function MobileHome() {
     setPeerConnection,
     setPeerConnectionState,
     setRpcDataChannel,
+    setRpcHidChannel,
+    setRpcHidUnreliableChannel,
+    setRpcHidUnreliableNonOrderedChannel,
+    setRpcHidProtocolVersion,
     setTransceiver,
     setAudioTransceiver,
   ]);
@@ -687,9 +729,10 @@ export default function MobileHome() {
 
   const setUsbState = useHidStore(state => state.setUsbState);
   const setHdmiState = useVideoStore(state => state.setHdmiState);
+  const setVideoInput = useVideoStore(state => state.setVideoInput);
 
-  const keyboardLedState = useHidStore(state => state.keyboardLedState);
   const setKeyboardLedState = useHidStore(state => state.setKeyboardLedState);
+  const setKeysDownState = useHidStore(state => state.setKeysDownState);
 
   const setKeyboardLedStateSyncAvailable = useHidStore(state => state.setKeyboardLedStateSyncAvailable);
 
@@ -714,7 +757,7 @@ export default function MobileHome() {
     }
 
     if (resp.method === "videoInputState") {
-      setHdmiState(resp.params as Parameters<VideoState["setHdmiState"]>[0]);
+      applyVideoInputState(resp.params as VideoInputStatePayload, setHdmiState, setVideoInput);
     }
 
     if (resp.method === "networkState") {
@@ -746,6 +789,11 @@ export default function MobileHome() {
       console.log("Setting keyboard led state", ledState);
       setKeyboardLedState(ledState);
       setKeyboardLedStateSyncAvailable(true);
+    }
+
+    if (resp.method === "keysDownState") {
+      // Device-truth key state: the source for per-side modifier highlighting.
+      setKeysDownState(resp.params as { modifier: number; keys: number[] });
     }
 
     if (resp.method === "otaState") {
@@ -817,9 +865,9 @@ export default function MobileHome() {
   const updateVideoState = useCallback(() => {
     send("getVideoState", {}, resp => {
       if ("error" in resp) return;
-      setHdmiState(resp.result as Parameters<VideoState["setHdmiState"]>[0]);
+      applyVideoInputState(resp.result as VideoInputStatePayload, setHdmiState, setVideoInput);
     });
-  }, [send, setHdmiState]);
+  }, [send, setHdmiState, setVideoInput]);
 
   useEffect(() => {
     if (rpcDataChannel?.readyState !== "open") return;
@@ -840,26 +888,62 @@ export default function MobileHome() {
 
   // request keyboard led state from the device
   useEffect(() => {
-    if (rpcDataChannel?.readyState !== "open") return;
-    if (keyboardLedState !== undefined) return;
-    console.log("Requesting keyboard led state");
+    if (!forceHttp && rpcDataChannel?.readyState !== "open") return;
+    // Only host mode reads the device. In browser mode asking here would put the
+    // device's (often unknown) values on top of the browser's own readings.
+    if (keyboardLedSync !== "host") return;
+    // Query state belongs to this connection and LED source, not the component.
+    let disposed = false;
+    let pending = false;
+    let received = false;
+    let disabled = false;
+    let generation = 0;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
 
-    send("getKeyboardLedState", {}, resp => {
-      if ("error" in resp) {
-        // -32601 means the method is not supported
-        if (resp.error.code === -32601) {
-          setKeyboardLedStateSyncAvailable(false);
-          console.error("Failed to get keyboard led state, disabling sync", resp.error);
-        } else {
-          console.error("Failed to get keyboard led state", resp.error);
+    // The device only pushes a new state when the host changes its lock lights,
+    // and the host may not have reported yet when the channel opens. Retry until
+    // the first answer arrives instead of leaving the panel blank forever.
+    const request = () => {
+      if (disposed || disabled || pending || received) return;
+      pending = true;
+      const requestGeneration = ++generation;
+      timeout = setTimeout(() => {
+        generation++;
+        pending = false;
+      }, 2000);
+      console.log("Requesting keyboard led state");
+
+      send("getKeyboardLedState", {}, resp => {
+        if (disposed || generation !== requestGeneration ||
+            useSettingsStore.getState().keyboardLedSync !== "host") return;
+        clearTimeout(timeout);
+        pending = false;
+        if ("error" in resp) {
+          // -32601 means the method is not supported
+          if (resp.error.code === -32601) {
+            disabled = true;
+            setKeyboardLedStateSyncAvailable(false);
+            console.error("Failed to get keyboard led state, disabling sync", resp.error);
+          } else {
+            console.error("Failed to get keyboard led state, will retry", resp.error);
+          }
+          return;
         }
-        return;
-      }
-      console.log("Keyboard led state", resp.result);
-      setKeyboardLedState(resp.result as KeyboardLedState);
-      setKeyboardLedStateSyncAvailable(true);
-    });
-  }, [rpcDataChannel?.readyState, send, setKeyboardLedState, setKeyboardLedStateSyncAvailable, keyboardLedState]);
+        console.log("Keyboard led state", resp.result);
+        received = (resp.result as KeyboardLedState).reported !== false;
+        setKeyboardLedState(resp.result as KeyboardLedState);
+        setKeyboardLedStateSyncAvailable(true);
+      });
+    };
+
+    request();
+    const timer = setInterval(request, 2000);
+    return () => {
+      disposed = true;
+      clearTimeout(timeout);
+      clearInterval(timer);
+    };
+  }, [rpcDataChannel, forceHttp, keyboardLedSync, send, setKeyboardLedState, setKeyboardLedStateSyncAvailable]);
 
   const diskChannel = useRTCStore(state => state.diskChannel)!;
   const file = useMountMediaStore(state => state.localFile)!;

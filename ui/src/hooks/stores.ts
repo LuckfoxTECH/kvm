@@ -6,6 +6,7 @@ import {
   MAX_TOTAL_MACROS,
   MAX_KEYS_PER_STEP,
 } from "@/constants/macros";
+import type { KeyboardFormFactor } from "@/keyboardFormFactor";
 
 // Define the JsonRpc types for better type checking
 interface JsonRpcResponse {
@@ -39,7 +40,7 @@ const appendStatToMap = <T extends { timestamp: number }>(
 
 // Constants and types
 export type AvailableSidebarViews = "ConsoleLogViewer" | "MacroMoreList" | "Fullscreen" | "TerminalTabsMobile" | "SettingsModal" | "ClipboardMobile" | "KeyboardPanel" | "MousePanel" | "SettingsVideo"
-  | "connection-stats" | "Clipboard" | "PowerControl" | "Macros" | "VirtualMedia" | "SharedFolders" | "UsbEpModeSelect" | "UsbStatusPanel" | null;
+  | "connection-stats" | "Clipboard" | "PowerControl" | "Macros" | "VirtualMedia" | "SharedFolders" | "UsbEpModeSelect" | "UsbStatusPanel" | "RemoteStatus" | "HdmiStatus" | null;
 export type AvailableTerminalTypes = "kvm" | "serial" | "none";
 
 export interface User {
@@ -160,6 +161,21 @@ interface RTCState {
   setRpcDataChannel: (channel: RTCDataChannel) => void;
   rpcDataChannel: RTCDataChannel | null;
 
+  hidRpcDisabled: boolean;
+  setHidRpcDisabled: (disabled: boolean) => void;
+
+  rpcHidProtocolVersion: number | null;
+  setRpcHidProtocolVersion: (version: number | null) => void;
+
+  rpcHidChannel: RTCDataChannel | null;
+  setRpcHidChannel: (channel: RTCDataChannel | null) => void;
+
+  rpcHidUnreliableChannel: RTCDataChannel | null;
+  setRpcHidUnreliableChannel: (channel: RTCDataChannel | null) => void;
+
+  rpcHidUnreliableNonOrderedChannel: RTCDataChannel | null;
+  setRpcHidUnreliableNonOrderedChannel: (channel: RTCDataChannel | null) => void;
+
   diskChannel: RTCDataChannel | null;
   setDiskChannel: (channel: RTCDataChannel) => void;
 
@@ -221,6 +237,22 @@ export const useRTCStore = create<RTCState>(set => ({
 
   rpcDataChannel: null,
   setRpcDataChannel: channel => set({ rpcDataChannel: channel }),
+
+  hidRpcDisabled: false,
+  setHidRpcDisabled: disabled => set({ hidRpcDisabled: disabled }),
+
+  rpcHidProtocolVersion: null,
+  setRpcHidProtocolVersion: version => set({ rpcHidProtocolVersion: version }),
+
+  rpcHidChannel: null,
+  setRpcHidChannel: channel => set({ rpcHidChannel: channel }),
+
+  rpcHidUnreliableChannel: null,
+  setRpcHidUnreliableChannel: channel => set({ rpcHidUnreliableChannel: channel }),
+
+  rpcHidUnreliableNonOrderedChannel: null,
+  setRpcHidUnreliableNonOrderedChannel: channel =>
+    set({ rpcHidUnreliableNonOrderedChannel: channel }),
 
   transceiver: null,
   setTransceiver: transceiver => set({ transceiver }),
@@ -327,6 +359,13 @@ export interface VideoState {
     ready: boolean;
     error?: Extract<VideoState["hdmiState"], "no_signal" | "no_lock" | "out_of_range">;
   }) => void;
+  // Raw values last reported by the device's video input event. Unlike
+  // width/height (decoded stream size) these are the HDMI source timings, so
+  // they stay 0 while there is no signal.
+  inputWidth: number;
+  inputHeight: number;
+  inputFps: number;
+  setVideoInput: (state: { width: number; height: number; fps: number }) => void;
 }
 
 export interface BacklightSettings {
@@ -350,6 +389,11 @@ export const useVideoStore = create<VideoState>(set => ({
   setSize: (width, height) => set({ width, height }),
 
   hdmiState: "connecting",
+  inputWidth: 0,
+  inputHeight: 0,
+  inputFps: 0,
+  setVideoInput: ({ width, height, fps }) =>
+    set({ inputWidth: width, inputHeight: height, inputFps: fps }),
   setHdmiState: state => {
     if (!state) return;
     const { ready, error } = state;
@@ -364,7 +408,10 @@ export const useVideoStore = create<VideoState>(set => ({
   },
 }));
 
-export type KeyboardLedSync = "auto" | "browser" | "host";
+// There is no "auto": the client picks a source, because whether the controlled
+// machine reports its lock lights at all is a property of that machine, not
+// something the UI can guess from here.
+export type KeyboardLedSync = "browser" | "host";
 
 interface SettingsState {
   language: string;
@@ -404,6 +451,9 @@ interface SettingsState {
 
   keyboardLayout: string;
   setKeyboardLayout: (layout: string) => void;
+
+  keyboardFormFactor: KeyboardFormFactor;
+  setKeyboardFormFactor: (formFactor: KeyboardFormFactor) => void;
 
   actionBarCtrlAltDel: boolean;
   setActionBarCtrlAltDel: (enabled: boolean) => void;
@@ -491,10 +541,13 @@ export const useSettingsStore = create(
       keyboardLayout: "en-US",
       setKeyboardLayout: layout => set({ keyboardLayout: layout }),
 
+      keyboardFormFactor: "ANSI",
+      setKeyboardFormFactor: formFactor => set({ keyboardFormFactor: formFactor }),
+
       actionBarCtrlAltDel: false,
       setActionBarCtrlAltDel: enabled => set({ actionBarCtrlAltDel: enabled }),
 
-      keyboardLedSync: "auto",
+      keyboardLedSync: "host",
       setKeyboardLedSync: sync => set({ keyboardLedSync: sync }),
 
       scrollThrottling: 0,
@@ -534,6 +587,13 @@ export const useSettingsStore = create(
     {
       name: "settings",
       storage: createJSONStorage(() => localStorage),
+      // "auto" was a stored default that could never be picked in the UI. Now that
+      // the choice is explicit, profiles still carrying it land on host-only.
+      merge: (persisted, current) => {
+        const merged = { ...current, ...(persisted as Partial<SettingsState>) };
+        merged.keyboardLedSync = merged.keyboardLedSync === "browser" ? "browser" : "host";
+        return merged;
+      },
     },
   ),
 );
@@ -588,12 +648,30 @@ export const useMountMediaStore = create<MountMediaState>(set => ({
   setErrorMessage: message => set({ errorMessage: message }),
 }));
 
+export const hidKeyBufferSize = 6;
+export const hidErrorRollOver = 0x01;
+
+export interface KeysDownState {
+  modifier: number;
+  keys: number[];
+}
+
 export interface KeyboardLedState {
   num_lock: boolean;
   caps_lock: boolean;
   scroll_lock: boolean;
   compose: boolean;
   kana: boolean;
+  // shift is not part of the main USB HID spec; the device reports it when the
+  // host lights bit 6. Older firmware never sends it.
+  shift?: boolean;
+  // reported tells "lights off" apart from "nobody has told us yet": the lamps
+  // render a grey question mark until something claims to know. Both the device
+  // LED report and the browser's own getModifierState set it, because either is
+  // a real answer for the mode in force. Switching the LED source therefore has
+  // to clear it (resetKeyboardLedTruth), otherwise a browser answer would
+  // survive into host mode and be drawn as if the host had reported it.
+  reported?: boolean;
 };
 const defaultKeyboardLedState: KeyboardLedState = {
   num_lock: false,
@@ -629,6 +707,9 @@ export interface HidState {
 
   keyboardLedStateSyncAvailable: boolean;
   setKeyboardLedStateSyncAvailable: (available: boolean) => void;
+  // Drops whatever the previous LED source told us, so the lamps go back to
+  // unknown instead of showing a value that belongs to a mode we left.
+  resetKeyboardLedTruth: () => void;
 
   keysDownState?: { modifier: number; keys: number[] };
   setKeysDownState: (state: { modifier: number; keys: number[] }) => void;
@@ -646,6 +727,17 @@ export interface HidState {
   
   isReinitializingGadget: boolean;
   setIsReinitializingGadget: (reinitializing: boolean) => void;
+
+  // Mirrors of the device side USB gadget functions. Input handlers read these
+  // to stop capturing keyboard/mouse traffic while the corresponding HID
+  // interface is not attached, which would otherwise keep failing or retrigger
+  // a gadget reinitialization.
+  usbEmulationEnabled: boolean;
+  setUsbEmulationEnabled: (enabled: boolean) => void;
+  usbKeyboardEnabled: boolean;
+  setUsbKeyboardEnabled: (enabled: boolean) => void;
+  usbMouseEnabled: boolean;
+  setUsbMouseEnabled: (enabled: boolean) => void;
 }
 
 export interface SerialState {
@@ -678,16 +770,21 @@ export const useHidStore = create<HidState>((set, get) => ({
   setIsNumLockActive: active => {
     const keyboardLedState = { ...(get().keyboardLedState || defaultKeyboardLedState) };
     keyboardLedState.num_lock = active;
+    // The browser now holds local truth for the lamps, so stop rendering them as
+    // unknown. This is the browser-managed path only; host mode never gets here.
+    keyboardLedState.reported = true;
     set({ keyboardLedState });
   },
   setIsCapsLockActive: active => {
     const keyboardLedState = { ...(get().keyboardLedState || defaultKeyboardLedState) };
     keyboardLedState.caps_lock = active;
+    keyboardLedState.reported = true;
     set({ keyboardLedState });
   },
   setIsScrollLockActive: active => {
     const keyboardLedState = { ...(get().keyboardLedState || defaultKeyboardLedState) };
     keyboardLedState.scroll_lock = active;
+    keyboardLedState.reported = true;
     set({ keyboardLedState });
   },
 
@@ -696,6 +793,11 @@ export const useHidStore = create<HidState>((set, get) => ({
 
   keyboardLedStateSyncAvailable: false,
   setKeyboardLedStateSyncAvailable: available => set({ keyboardLedStateSyncAvailable: available }),
+  resetKeyboardLedTruth: () =>
+    set({
+      keyboardLedState: { ...defaultKeyboardLedState },
+      keyboardLedStateSyncAvailable: false,
+    }),
 
   isVirtualKeyboardEnabled: false,
   setVirtualKeyboardEnabled: enabled => set({ isVirtualKeyboardEnabled: enabled }),
@@ -711,6 +813,15 @@ export const useHidStore = create<HidState>((set, get) => ({
   
   isReinitializingGadget: false,
   setIsReinitializingGadget: reinitializing => set({ isReinitializingGadget: reinitializing }),
+
+  // Default to enabled: until the device reports otherwise, input has to keep
+  // working exactly as before.
+  usbEmulationEnabled: true,
+  setUsbEmulationEnabled: enabled => set({ usbEmulationEnabled: enabled }),
+  usbKeyboardEnabled: true,
+  setUsbKeyboardEnabled: enabled => set({ usbKeyboardEnabled: enabled }),
+  usbMouseEnabled: true,
+  setUsbMouseEnabled: enabled => set({ usbMouseEnabled: enabled }),
 }));
 
 
@@ -1209,6 +1320,21 @@ export const useMacrosStore = create<MacrosState>((set, get) => ({
   },
 }));
 
+// The device exposes every overlay network through its own RPC: TailScale and
+// ZeroTier answer with a settings object, NetBird with a status object, and the
+// rest with nothing but `{ running: bool }`. Rather than mirror six
+// near-identical field triplets in this store, the flag-only tunnels share one
+// generic map that the Remote drawer refreshes while it is open.
+export type TunnelKey = "netbird" | "wireguard" | "easytier" | "vnt" | "frpc" | "cloudflared";
+
+export interface TunnelEntry {
+  up: boolean;
+  /** Same vocabulary as STATE_LABEL in RemoteStatusPanel.tsx. */
+  state: string;
+  /** Address or reason worth showing instead of the state label. */
+  detail?: string;
+}
+
 export interface VpnState {
   tailScaleConnectionState: "connecting" | "connected" | "disconnected" | "closed" | "logined";
   setTailScaleConnectionState: (state: VpnState["tailScaleConnectionState"]) => void;
@@ -1230,6 +1356,9 @@ export interface VpnState {
   
   zeroTierIP: string | null;
   setZeroTierIP: (ip: string) => void;
+
+  tunnelEntries: Partial<Record<TunnelKey, TunnelEntry>>;
+  setTunnelEntry: (key: TunnelKey, entry: TunnelEntry) => void;
 };
 
 export const useVpnStore = create<VpnState>(set => ({
@@ -1248,6 +1377,10 @@ export const useVpnStore = create<VpnState>(set => ({
   setZeroTierNetworkID: networkID => set({ zeroTierNetworkID: networkID }),
   zeroTierIP: null,
   setZeroTierIP: networkID => set({ zeroTierIP: networkID }),
+
+  tunnelEntries: {},
+  setTunnelEntry: (key, entry) =>
+    set(state => ({ tunnelEntries: { ...state.tunnelEntries, [key]: entry } })),
 }));
 
 export interface MacrosSideState {

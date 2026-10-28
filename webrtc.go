@@ -5,8 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"strings"
+	"sync"
+	"time"
 
 	"kvm/internal/logging"
+	"kvm/internal/usbgadget"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -23,7 +26,173 @@ type Session struct {
 	ControlChannel           *webrtc.DataChannel
 	RPCChannel               *webrtc.DataChannel
 	DiskChannel              *webrtc.DataChannel
+	HidChannel               *webrtc.DataChannel
 	shouldUmountVirtualMedia bool
+
+	// hidRPCAvailable is set once the client completes the HID RPC handshake.
+	hidRPCAvailable bool
+	hidQueue        []chan hidQueueMessage
+
+	// keysDownStateQueue carries device-truth keyboard state to the client.
+	keysDownStateQueue chan usbgadget.KeysDownState
+
+	// keep-alive jitter tracking (see handleHidRPCKeypressKeepAlive)
+	keepAliveJitterLock      sync.Mutex
+	lastKeepAliveArrivalTime time.Time
+	lastTimerResetTime       time.Time
+	keepAliveActive          bool
+
+	macroLock sync.Mutex
+	macroTask *hidMacroTask
+
+	done      chan struct{}
+	closeOnce sync.Once
+}
+
+// closeSignals releases the HID worker goroutines. Called on every terminal ICE
+// state so a closed session does not leak one goroutine per HID queue.
+func (s *Session) closeSignals() {
+	s.closeOnce.Do(func() {
+		close(s.done)
+		s.cancelHidMacro()
+	})
+}
+
+type hidMacroTask struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+// Register at admission so cancellation also reaches a macro still in the queue.
+func (s *Session) newHidMacro() *hidMacroTask {
+	s.macroLock.Lock()
+	defer s.macroLock.Unlock()
+	if s.macroTask != nil {
+		s.macroTask.cancel()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	task := &hidMacroTask{ctx: ctx, cancel: cancel}
+	s.macroTask = task
+	if s.isClosed() {
+		cancel()
+	}
+	return task
+}
+
+func (s *Session) cancelHidMacro() {
+	s.macroLock.Lock()
+	defer s.macroLock.Unlock()
+	if s.macroTask != nil {
+		s.macroTask.cancel()
+	}
+}
+
+func (s *Session) finishHidMacro(task *hidMacroTask) {
+	task.cancel()
+	s.macroLock.Lock()
+	defer s.macroLock.Unlock()
+	if s.macroTask == task {
+		s.macroTask = nil
+	}
+}
+
+func (s *Session) isClosed() bool {
+	select {
+	case <-s.done:
+		return true
+	default:
+		return false
+	}
+}
+
+const (
+	hidQueueCount = 4
+	hidQueueSize  = 256
+)
+
+// initHidQueues creates one ordered worker queue per HID traffic class (see
+// hidrpc.GetQueueIndex) and starts a worker goroutine for each.
+func (s *Session) initHidQueues() {
+	s.hidQueue = make([]chan hidQueueMessage, 0, hidQueueCount)
+	for i := 0; i < hidQueueCount; i++ {
+		s.hidQueue = append(s.hidQueue, make(chan hidQueueMessage, hidQueueSize))
+	}
+	for _, queue := range s.hidQueue {
+		go s.handleHidQueue(queue)
+	}
+
+	s.keysDownStateQueue = make(chan usbgadget.KeysDownState, hidQueueSize)
+	go s.handleKeysDownStateQueue()
+}
+
+// handleKeysDownStateQueue pushes keyboard state changes to the client. A single
+// worker keeps ordering and drops (instead of blocking) when the client is slow.
+func (s *Session) handleKeysDownStateQueue() {
+	for {
+		select {
+		case <-s.done:
+			return
+		case state := <-s.keysDownStateQueue:
+			s.reportHidRPCKeysDownState(state)
+		}
+	}
+}
+
+func (s *Session) enqueueKeysDownState(state usbgadget.KeysDownState) {
+	if s == nil || s.isClosed() || s.keysDownStateQueue == nil {
+		return
+	}
+
+	select {
+	case s.keysDownStateQueue <- state:
+	case <-s.done:
+	default:
+		// The client is not draining state updates; dropping the oldest keeps the
+		// queue bounded without stalling the USB HID write path.
+		select {
+		case <-s.keysDownStateQueue:
+		default:
+		}
+		select {
+		case s.keysDownStateQueue <- state:
+		default:
+		}
+	}
+}
+
+func (s *Session) handleHidQueue(queue <-chan hidQueueMessage) {
+	for {
+		select {
+		case <-s.done:
+			return
+		case msg := <-queue:
+			if s.isClosed() {
+				return
+			}
+			onHidMessage(msg, s)
+		}
+	}
+}
+
+func (s *Session) enqueueHidMessage(queueIndex int, msg hidQueueMessage) bool {
+	if s == nil || s.isClosed() {
+		return false
+	}
+	if queueIndex < 0 || queueIndex >= len(s.hidQueue) {
+		return false
+	}
+
+	queue := s.hidQueue[queueIndex]
+	if queue == nil {
+		return false
+	}
+
+	select {
+	case queue <- msg:
+		return true
+	case <-s.done:
+		return false
+	}
 }
 
 type SessionConfig struct {
@@ -121,11 +290,24 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	session := &Session{peerConnection: peerConnection}
+	session := &Session{
+		peerConnection: peerConnection,
+		done:           make(chan struct{}),
+	}
+	session.initHidQueues()
 
 	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
 		scopedLogger.Info().Str("label", d.Label()).Uint16("id", *d.ID()).Msg("New DataChannel")
 		switch d.Label() {
+		case "hidrpc":
+			session.HidChannel = d
+			d.OnMessage(getOnHidMessageHandler(session, scopedLogger, "hidrpc"))
+			d.OnClose(session.cancelHidMacro)
+		// the two unreliable channels are inbound only; nothing is sent on them
+		case "hidrpc-unreliable-ordered":
+			d.OnMessage(getOnHidMessageHandler(session, scopedLogger, "hidrpc-unreliable-ordered"))
+		case "hidrpc-unreliable-nonordered":
+			d.OnMessage(getOnHidMessageHandler(session, scopedLogger, "hidrpc-unreliable-nonordered"))
 		case "rpc":
 			session.RPCChannel = d
 			d.OnMessage(func(msg webrtc.DataChannelMessage) {
@@ -221,15 +403,17 @@ func newSession(sessionConfig SessionConfig) (*Session, error) {
 		//state changes on closing browser tab disconnected->failed, we need to manually close it
 		if connectionState == webrtc.ICEConnectionStateFailed {
 			scopedLogger.Debug().Msg("ICE Connection State is failed, closing peerConnection")
+			session.closeSignals()
 			_ = peerConnection.Close()
 		}
 		if connectionState == webrtc.ICEConnectionStateClosed {
 			scopedLogger.Debug().Msg("ICE Connection State is closed, unmounting virtual media")
+			session.closeSignals()
 			if session == currentSession {
 				currentSession = nil
 			}
 			if session.shouldUmountVirtualMedia {
-				err := rpcUnmountImage()
+				err := unmountImage(false)
 				scopedLogger.Warn().Err(err).Msg("unmount image failed on connection close")
 			}
 			if isConnected {
@@ -264,4 +448,12 @@ func onLastSessionDisconnected() {
 		_ = writeCtrlAction("stop_video")
 	}
 	StopNtpAudioServer()
+
+	// Release keys still held when the last client goes away, and cancel pending
+	// auto-release timers first so a racing timer cannot reintroduce stale state
+	// after the clear.
+	if gadget != nil {
+		gadget.CancelAllAutoReleaseTimers()
+		_ = gadget.KeyboardReport(0, make([]uint8, 6))
+	}
 }

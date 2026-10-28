@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, useRef } from "react";
 import { isMobile } from "react-device-detect";
 
 import { useJsonRpc } from "@/hooks/useJsonRpc";
+import { useHidRpc } from "@/hooks/useHidRpc";
 import { useMouseStore, useSettingsStore, useVideoStore, useHidStore } from "@/hooks/stores";
 
 import { usePointerLock } from "./usePointerLock";
@@ -20,11 +21,19 @@ export const useMouseEvents = (
   externalButtons = 0
 ) => {
   const [, sendNotification] = useJsonRpc();
+  // Mouse reports prefer the binary HID channel; JSON-RPC stays as the fallback
+  // for devices whose firmware predates the hidrpc handshake.
+  const { reportAbsMouseEvent, reportRelMouseEvent, rpcHidReady } = useHidRpc();
   const [blockWheelEvent, setBlockWheelEvent] = useState(false);
   const settings = useSettingsStore();
   const { setMousePosition, setMouseMove } = useMouseStore();
   const { width: videoWidth, height: videoHeight } = useVideoStore();
   const isReinitializingGadget = useHidStore(state => state.isReinitializingGadget);
+  // Both mouse interfaces are switched together, so one flag covers absolute and
+  // relative. The emulation switch detaches the whole gadget, so it gates too.
+  const mouseEnabled = useHidStore(
+    state => state.usbEmulationEnabled && state.usbMouseEnabled,
+  );
   const touchDragActiveRef = useRef(false);
   const relMouseFrameRef = useRef<number | null>(null);
   const absMouseFrameRef = useRef<number | null>(null);
@@ -42,12 +51,20 @@ export const useMouseEvents = (
       if (!force && settings.mouseMode !== "relative") return;
       // Don't send mouse events while reinitializing gadget
       if (isReinitializingGadget) return;
+      // The mouse interfaces are switched off on the device. Reporting movement
+      // would only fail and can retrigger a gadget reinitialization.
+      if (!mouseEnabled) return;
       const dx = calcDelta(x);
       const dy = calcDelta(y);
-      sendNotification("relMouseReport", { dx, dy, buttons });
+      if (rpcHidReady) {
+        reportRelMouseEvent(dx, dy, buttons);
+      } else {
+        // kept for backward compatibility
+        sendNotification("relMouseReport", { dx, dy, buttons });
+      }
       setMouseMove({ x, y, buttons });
     },
-    [sendNotification, setMouseMove, settings.mouseMode, settings.mouseSensitivity, isReinitializingGadget],
+    [sendNotification, reportRelMouseEvent, rpcHidReady, setMouseMove, settings.mouseMode, settings.mouseSensitivity, isReinitializingGadget, mouseEnabled],
   );
 
   const sendAbsMouseMovement = useCallback(
@@ -55,10 +72,18 @@ export const useMouseEvents = (
       if (settings.mouseMode !== "absolute") return;
       // Don't send mouse events while reinitializing gadget
       if (isReinitializingGadget) return;
-      sendNotification("absMouseReport", { x, y, buttons });
+      // The mouse interfaces are switched off on the device. Reporting movement
+      // would only fail and can retrigger a gadget reinitialization.
+      if (!mouseEnabled) return;
+      if (rpcHidReady) {
+        reportAbsMouseEvent(x, y, buttons);
+      } else {
+        // kept for backward compatibility
+        sendNotification("absMouseReport", { x, y, buttons });
+      }
       setMousePosition(x, y);
     },
-    [sendNotification, setMousePosition, settings.mouseMode, isReinitializingGadget],
+    [sendNotification, reportAbsMouseEvent, rpcHidReady, setMousePosition, settings.mouseMode, isReinitializingGadget, mouseEnabled],
   );
 
   const sendVirtualRelativeMovement = useCallback(
@@ -236,6 +261,7 @@ export const useMouseEvents = (
     (e: WheelEvent) => {
       // Don't send wheel events while reinitializing gadget
       if (isReinitializingGadget) return;
+      if (!mouseEnabled) return;
       // e.stopPropagation();
       // e.preventDefault();
       if (settings.scrollThrottling && blockWheelEvent) {
@@ -250,14 +276,20 @@ export const useMouseEvents = (
       const clampedScrollValue = Math.max(-127, Math.min(127, scrollValue));
       const wheelY = settings.invertScroll ? clampedScrollValue : -clampedScrollValue;
 
-      sendNotification("wheelReport", { wheelY, mouseMode: settings.mouseMode });
+      // deltaX is what a shift+wheel or a trackpad horizontal swipe produces.
+      const scrollValueX = Math.sign(e.deltaX);
+      const wheelX = settings.invertScroll ? scrollValueX : -scrollValueX;
+
+      if (wheelY === 0 && wheelX === 0) return;
+
+      sendNotification("wheelReport", { wheelY, wheelX });
 
       if (settings.scrollThrottling && !blockWheelEvent) {
         setBlockWheelEvent(true);
         setTimeout(() => setBlockWheelEvent(false), settings.scrollThrottling);
       }
     },
-    [sendNotification, blockWheelEvent, settings, isReinitializingGadget],
+    [sendNotification, blockWheelEvent, settings, isReinitializingGadget, mouseEnabled],
   );
 
   const resetMousePosition = useCallback(() => {
@@ -337,5 +369,6 @@ export const useMouseEvents = (
   return {
     setupMouseEvents,
     sendVirtualRelativeMovement,
+    sendAbsMouseMovement,
   };
 };
