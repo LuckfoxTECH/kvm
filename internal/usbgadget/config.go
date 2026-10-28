@@ -107,6 +107,29 @@ func (u *UsbGadget) isGadgetConfigItemEnabled(itemKey string) bool {
 	}
 }
 
+// hidFunctionOrder lists the HID functions in creation order. The kernel numbers
+// /dev/hidgN nodes by that order, not by the hid.usbN suffix in the function name,
+// so a disabled keyboard shifts both mouse nodes down by one.
+var hidFunctionOrder = []string{"keyboard", "absolute_mouse", "relative_mouse"}
+
+// HidgNodePath returns the /dev/hidgN node backing one HID function. These paths
+// must not be hardcoded: as soon as a function is switched off the nodes are
+// renumbered, and an absolute-mouse report written to the relative-mouse node gets
+// decoded with a different report descriptor - which the host turns into stray
+// clicks and a cursor that only moves on one axis.
+func (u *UsbGadget) HidgNodePath(itemKey string) string {
+	index := 0
+	for _, key := range hidFunctionOrder {
+		if key == itemKey {
+			break
+		}
+		if u.isGadgetConfigItemEnabled(key) {
+			index++
+		}
+	}
+	return fmt.Sprintf("/dev/hidg%d", index)
+}
+
 func (u *UsbGadget) loadGadgetConfig() {
 	if u.customConfig.isEmpty {
 		u.log.Trace().Msg("using default gadget config")
@@ -326,21 +349,23 @@ func (u *UsbGadget) configureUsbGadget(resetUsb bool) error {
 		Bool("reset_usb", resetUsb).
 		Msg("configuring USB gadget via transaction")
 
-	return u.WithTransaction(func() error {
-		u.log.Info().Msg("Transaction: Mounting configfs")
-		u.tx.MountConfigFS()
+	return u.withHIDRebind(func() error {
+		return u.WithTransaction(func() error {
+			u.log.Info().Msg("Transaction: Mounting configfs")
+			u.tx.MountConfigFS()
 
-		u.log.Info().Msg("Transaction: Creating config path")
-		u.tx.CreateConfigPath()
+			u.log.Info().Msg("Transaction: Creating config path")
+			u.tx.CreateConfigPath()
 
-		u.log.Info().Msg("Transaction: Writing gadget configuration")
-		u.tx.WriteGadgetConfig()
+			u.log.Info().Msg("Transaction: Writing gadget configuration")
+			u.tx.WriteGadgetConfig()
 
-		if resetUsb {
-			u.log.Info().Msg("Transaction: Rebinding USB")
-			u.tx.RebindUsb(true)
-		}
-		return nil
+			if resetUsb {
+				u.log.Info().Msg("Transaction: Rebinding USB")
+				u.tx.RebindUsb(true)
+			}
+			return nil
+		})
 	})
 }
 

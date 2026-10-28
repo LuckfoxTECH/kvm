@@ -101,10 +101,14 @@ type Config struct {
 	WakeOnLanDevices     []WakeOnLanDevice `json:"wake_on_lan_devices"`
 	KeyboardMacros       []KeyboardMacro   `json:"keyboard_macros"`
 	KeyboardLayout       string            `json:"keyboard_layout"`
-	EdidString           string            `json:"hdmi_edid_string"`
-	ForceHpd             bool              `json:"force_hpd"`
-	ActiveExtension      string            `json:"active_extension"`
-	DisplayRotation      string            `json:"display_rotation"`
+	// KeyboardFormFactor is the physical key arrangement the on-screen keyboard
+	// mirrors: ANSI (US), ISO (Europe) or JIS (Japan). It is independent of
+	// KeyboardLayout, which selects the character mapping of a language.
+	KeyboardFormFactor string `json:"keyboard_form_factor"`
+	EdidString         string `json:"hdmi_edid_string"`
+	ForceHpd           bool   `json:"force_hpd"`
+	ActiveExtension    string `json:"active_extension"`
+	DisplayRotation    string `json:"display_rotation"`
 	// DisplayBrightnessPercent is the backlight percentage (0-100), the same unit the
 	// touchscreen slider and the web UI slider use.
 	DisplayBrightnessPercent   int                    `json:"display_brightness_percent"`
@@ -130,7 +134,7 @@ type Config struct {
 	TimeZone                   string                 `json:"time_zone"`
 	LEDGreenMode               string                 `json:"led_green_mode"`
 	LEDYellowMode              string                 `json:"led_yellow_mode"`
-	AutoMountImage             *AutoMountImageConfig  `json:"auto_mount_image,omitempty"`
+	AutoMountImage             *AutoMountImageConfig  `json:"auto_mount_image"`
 	EasytierAutoStart          bool                   `json:"easytier_autostart"`
 	EasytierConfig             EasytierConfig         `json:"easytier_config"`
 	VntAutoStart               bool                   `json:"vnt_autostart"`
@@ -222,6 +226,7 @@ var defaultConfig = &Config{
 	DisplayRotation:          "180",
 	TimeZone:                 "UTC-8",
 	KeyboardLayout:           "en_US",
+	KeyboardFormFactor:       "ANSI",
 	DisplayBrightnessPercent: 32,
 	DisplayDimAfterSec:       120,  // 2 minutes
 	DisplayOffAfterSec:       1800, // 30 minutes
@@ -256,7 +261,7 @@ var defaultConfig = &Config{
 	AudioMode:            "disabled",
 	LEDGreenMode:         "network-rx",
 	LEDYellowMode:        "kernel-activity",
-	AutoMountImage:       &AutoMountImageConfig{Filename: "system_info.img", Source: "kvm"},
+	AutoMountImage:       &AutoMountImageConfig{Filename: systemInfoImageFilename, Source: "kvm"},
 	WireguardAutoStart:   false,
 	NpuAppEnabled:        false,
 	Firewall: &FirewallConfig{
@@ -611,12 +616,16 @@ func ensureConfigLoaded() {
 
 var systemInfoWriteLock sync.Mutex
 
+// systemInfoImageFilename is the image auto-mounted by default. Kept in one place
+// because the auto-mount logic and the image writer must agree on the name.
+const systemInfoImageFilename = "system_info.img"
+
 func writeSystemInfoImg() error {
 	systemInfoWriteLock.Lock()
 	defer systemInfoWriteLock.Unlock()
 
-	imgPath := filepath.Join(imagesFolder, "system_info.img")
-	unverifiedimgPath := filepath.Join(imagesFolder, "system_info.img") + ".unverified"
+	imgPath := filepath.Join(imagesFolder, systemInfoImageFilename)
+	unverifiedimgPath := imgPath + ".unverified"
 	mountPoint := "/mnt/system_info"
 
 	run := func(cmd string, args ...string) error {

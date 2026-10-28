@@ -47,7 +47,26 @@ func (u *UsbGadget) RebindUsb(ignoreUnbindError bool) error {
 	u.configLock.Lock()
 	defer u.configLock.Unlock()
 
-	return u.rebindUsb(ignoreUnbindError)
+	return u.withHIDRebind(func() error {
+		return u.rebindUsb(ignoreUnbindError)
+	})
+}
+
+// withHIDRebind excludes HID access for the duration of a controller rebind and
+// waits for in-flight opens to drain, so no descriptor from the old generation
+// survives into the new one.
+func (u *UsbGadget) withHIDRebind(rebind func() error) error {
+	u.hidLifecycle.Lock()
+	defer u.hidLifecycle.Unlock()
+
+	if err := u.hidOpens.wait(hidOpenDrainTimeout); err != nil {
+		return err
+	}
+
+	// Rebinding recreates hidg nodes. Cached descriptors and their readers
+	// belong to the previous controller generation even if they stay open.
+	u.ResetHIDFiles()
+	return rebind()
 }
 
 // GetUsbState returns the current state of the USB gadget
@@ -58,7 +77,7 @@ func (u *UsbGadget) GetUsbState(enhancedDetection bool) (state string) {
 		if err == nil {
 			discState := strings.TrimSpace(string(discBytes))
 			if discState == "DISCONNECTED" {
-				return "not attached"
+				return USBStateNotAttached
 			}
 		}
 	}
@@ -67,11 +86,11 @@ func (u *UsbGadget) GetUsbState(enhancedDetection bool) (state string) {
 	stateBytes, err := os.ReadFile(stateFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "not attached"
+			return USBStateNotAttached
 		} else {
 			u.log.Trace().Err(err).Msg("failed to read usb state")
 		}
-		return "unknown"
+		return USBStateUnknown
 	}
 	return strings.TrimSpace(string(stateBytes))
 }

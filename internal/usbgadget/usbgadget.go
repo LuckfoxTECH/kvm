@@ -56,6 +56,11 @@ type UsbGadget struct {
 
 	configLock sync.Mutex
 
+	// hidLifecycle is held for reading by every HID access and exclusively by a
+	// rebind, so a controller reset never overlaps an in-flight HID write.
+	hidLifecycle sync.RWMutex
+	hidOpens     hidOpenTracker
+
 	keyboardHidFile *os.File
 	keyboardLock    sync.Mutex
 	absMouseHidFile *os.File
@@ -84,8 +89,10 @@ type UsbGadget struct {
 	onKeyboardStateChange *func(state KeyboardState)
 	onHidDeviceMissing    *func(device string, err error)
 
-	keysDownState       KeysDownState
-	autoReleaseTimers   []autoReleaseTimer
+	keysDownState        KeysDownState
+	onKeysDownChange     *func(state KeysDownState)
+	kbdAutoReleaseLock   sync.Mutex
+	kbdAutoReleaseTimers map[byte]*kbdAutoReleaseTimer
 
 	log *zerolog.Logger
 
@@ -142,6 +149,7 @@ func newUsbGadget(name string, configMap map[string]gadgetConfigItem, enabledDev
 		strictMode: config.strictMode,
 
 		logSuppressionCounter: make(map[string]int),
+		kbdAutoReleaseTimers:  make(map[byte]*kbdAutoReleaseTimer),
 
 		absMouseAccumulatedWheelY: 0,
 	}
@@ -150,6 +158,15 @@ func newUsbGadget(name string, configMap map[string]gadgetConfigItem, enabledDev
 	}
 
 	return g
+}
+
+// HasKeyboard reports whether the keyboard HID function is part of the current
+// gadget configuration. Recovery paths use it to avoid probing a function that
+// was intentionally disabled, which would report a false failure.
+func (u *UsbGadget) HasKeyboard() bool {
+	u.configLock.Lock()
+	defer u.configLock.Unlock()
+	return u.enabledDevices.Keyboard
 }
 
 // ResetHIDFiles closes all open HID gadget file descriptors.

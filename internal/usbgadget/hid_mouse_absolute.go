@@ -1,10 +1,8 @@
 package usbgadget
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"strings"
 )
 
 var absoluteMouseConfig = gadgetConfigItem{
@@ -31,14 +29,14 @@ var absoluteMouseCombinedReportDesc = []byte{
 	0xA1, 0x00, //     Collection (Physical)
 	0x05, 0x09, //         Usage Page (Button)
 	0x19, 0x01, //         Usage Minimum (0x01)
-	0x29, 0x03, //         Usage Maximum (0x03)
+	0x29, 0x05, //         Usage Maximum (0x05)
 	0x15, 0x00, //         Logical Minimum (0)
 	0x25, 0x01, //         Logical Maximum (1)
 	0x75, 0x01, //         Report Size (1)
-	0x95, 0x03, //         Report Count (3)
+	0x95, 0x05, //         Report Count (5)
 	0x81, 0x02, //         Input (Data, Var, Abs)
 	0x95, 0x01, //         Report Count (1)
-	0x75, 0x05, //         Report Size (5)
+	0x75, 0x03, //         Report Size (3)
 	0x81, 0x03, //         Input (Cnst, Var, Abs)
 	0x05, 0x01, //         Usage Page (Generic Desktop Ctrls)
 	0x09, 0x30, //         Usage (X)
@@ -62,33 +60,52 @@ var absoluteMouseCombinedReportDesc = []byte{
 	0x75, 0x08, //     Report Size (8)
 	0x95, 0x01, //     Report Count (1)
 	0x81, 0x06, //     Input (Data, Var, Rel)
+	0x05, 0x0C, //     Usage Page (Consumer)
+	0x0A, 0x38, 0x02, //     Usage (AC Pan)
+	0x15, 0x81, //     Logical Minimum (-127)
+	0x25, 0x7F, //     Logical Maximum (127)
+	0x75, 0x08, //     Report Size (8)
+	0x95, 0x01, //     Report Count (1)
+	0x81, 0x06, //     Input (Data, Var, Rel)
 
 	0xC0, // End Collection
 }
 
 func (u *UsbGadget) absMouseWriteHidFile(data []byte) error {
+	if !u.enabledDevices.AbsoluteMouse {
+		// Switched off, so /dev/hidg1 is absent by design rather than missing.
+		return ErrHIDDeviceNotConfigured
+	}
 	if u.absMouseHidFile == nil {
 		var err error
-		u.absMouseHidFile, err = os.OpenFile("/dev/hidg1", os.O_RDWR, 0666)
+		hidNodePath := u.HidgNodePath("absolute_mouse")
+		u.absMouseHidFile, err = os.OpenFile(hidNodePath, os.O_RDWR, 0666)
 		if err != nil {
 
-			if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "no such file or directory") || strings.Contains(err.Error(), "no such device") {
-				u.log.Error().
-					Str("device", "hidg1").
-					Str("device_name", "absolute_mouse").
-					Err(err).
-					Msg("HID device file missing, gadget may need reinitialization")
-				if u.onHidDeviceMissing != nil {
-					(*u.onHidDeviceMissing)("absolute_mouse", err)
+			if isMissingHidNodeError(err) {
+				if u.hidNodeGenuinelyMissing() {
+					u.log.Error().
+						Str("device", hidNodePath).
+						Str("device_name", "absolute_mouse").
+						Err(err).
+						Msg("HID device file missing, gadget may need reinitialization")
+					if u.onHidDeviceMissing != nil {
+						(*u.onHidDeviceMissing)("absolute_mouse", err)
+					}
+				} else {
+					u.log.Debug().
+						Str("device", hidNodePath).
+						Err(err).
+						Msg("hidg1 not present yet; host has not finished enumeration")
 				}
 			}
-			return fmt.Errorf("failed to open hidg1: %w", err)
+			return fmt.Errorf("failed to open %s: %w", hidNodePath, err)
 		}
 	}
 
 	_, err := u.absMouseHidFile.Write(data)
 	if err != nil {
-		u.logWithSupression("absMouseWriteHidFile", 100, u.log, err, "failed to write to hidg1")
+		u.logWithSuppression("absMouseWriteHidFile", 100, u.log, err, "failed to write to hidg1")
 		u.absMouseHidFile.Close()
 		u.absMouseHidFile = nil
 		return err
@@ -98,6 +115,9 @@ func (u *UsbGadget) absMouseWriteHidFile(data []byte) error {
 }
 
 func (u *UsbGadget) AbsMouseReport(x, y int, buttons uint8) error {
+	u.hidLifecycle.RLock()
+	defer u.hidLifecycle.RUnlock()
+
 	u.absMouseLock.Lock()
 	defer u.absMouseLock.Unlock()
 
@@ -129,18 +149,27 @@ func (u *UsbGadget) GetAbsMousePosition() (x, y int) {
 	return u.absMouseX, u.absMouseY
 }
 
-func (u *UsbGadget) AbsMouseWheelReport(wheelY int8) error {
+// HasAbsoluteMouse reports whether the absolute mouse HID function is enabled.
+func (u *UsbGadget) HasAbsoluteMouse() bool {
+	return u.enabledDevices.AbsoluteMouse
+}
+
+func (u *UsbGadget) AbsMouseWheelReport(wheelY, wheelX int8) error {
+	u.hidLifecycle.RLock()
+	defer u.hidLifecycle.RUnlock()
+
 	u.absMouseLock.Lock()
 	defer u.absMouseLock.Unlock()
 
 	// Only send a report if the value is non-zero
-	if wheelY == 0 {
+	if wheelY == 0 && wheelX == 0 {
 		return nil
 	}
 
 	err := u.absMouseWriteHidFile([]byte{
 		2,            // Report ID 2
 		byte(wheelY), // Wheel Y (signed)
+		byte(wheelX), // AC Pan (signed)
 	})
 
 	u.resetUserInputTime()
