@@ -473,6 +473,11 @@ interface SettingsState {
   showPressedKeys: boolean;
   setShowPressedKeys: (show: boolean) => void;
 
+  // Swaps the Command (GUI) and Control modifier bits on the way out, so a key in
+  // the Control position sends Command to the host - what macOS users expect.
+  swapCommandControl: boolean;
+  setSwapCommandControl: (enabled: boolean) => void;
+
   overrideCtrlV: boolean;
   setOverrideCtrlV: (enabled: boolean) => void;
   pasteShortcutEnabled: boolean;
@@ -561,6 +566,9 @@ export const useSettingsStore = create(
 
       showPressedKeys: true,
       setShowPressedKeys: show => set({ showPressedKeys: show }),
+
+      swapCommandControl: false,
+      setSwapCommandControl: enabled => set({ swapCommandControl: enabled }),
 
       overrideCtrlV: false,
       setOverrideCtrlV: enabled => set({ overrideCtrlV: enabled }),

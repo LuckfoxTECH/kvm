@@ -124,23 +124,28 @@ const KeyboardPanel: React.FC = () => {
 
   const keysOptionsList: Option[] = [
     { label: "Show Pressed Keys", value: "show-pressed-keys" },
+    { label: "Swap Command and Control", value: "swap-command-control" },
   ];
 
   const showPressedKeys = useSettingsStore(state => state.showPressedKeys);
   const setShowPressedKeys = useSettingsStore(state => state.setShowPressedKeys);
+  const swapCommandControl = useSettingsStore(state => state.swapCommandControl);
+  const setSwapCommandControl = useSettingsStore(state => state.setSwapCommandControl);
   const [keysOptions, setKeysOptions] = useState<string[]>([]);
 
-  // The toggle is rendered as a multi-select, so the option list has to mirror the
-  // stored setting rather than hold its own state.
+  // Both toggles are rendered as one multi-select, so the option list has to mirror
+  // the stored settings rather than hold its own state.
   useEffect(() => {
     const selected: string[] = [];
     if (showPressedKeys) selected.push("show-pressed-keys");
+    if (swapCommandControl) selected.push("swap-command-control");
     setKeysOptions(selected);
-  }, [showPressedKeys]);
+  }, [showPressedKeys, swapCommandControl]);
 
   const handleShowPressedChange = (data: string[] | string) => {
     const selected = Array.isArray(data) ? data : [data];
     setShowPressedKeys(selected.includes("show-pressed-keys"));
+    setSwapCommandControl(selected.includes("swap-command-control"));
   };
 
   const ledSyncOptions: Option[] = [

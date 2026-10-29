@@ -17,6 +17,26 @@ import { useHidRpc } from "@/hooks/useHidRpc";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import { keys, modifiers } from "@/keyboardMappings";
 
+// Modifier bits for Control and GUI (Command), left and right sides.
+const MODIFIER_CONTROL_LEFT = 0x01;
+const MODIFIER_CONTROL_RIGHT = 0x10;
+const MODIFIER_GUI_LEFT = 0x08;
+const MODIFIER_GUI_RIGHT = 0x80;
+
+// swapControlAndCommand exchanges the Control and GUI bits, pairing left with left
+// and right with right. The operation is its own inverse, which is what lets the
+// same helper undo it on the device-reported state. Sides are kept apart so the
+// keyboard highlighting still points at the physical key the user pressed.
+function swapControlAndCommand(modifier: number): number {
+  let out =
+    modifier & ~(MODIFIER_CONTROL_LEFT | MODIFIER_CONTROL_RIGHT | MODIFIER_GUI_LEFT | MODIFIER_GUI_RIGHT);
+  if (modifier & MODIFIER_CONTROL_LEFT) out |= MODIFIER_GUI_LEFT;
+  if (modifier & MODIFIER_GUI_LEFT) out |= MODIFIER_CONTROL_LEFT;
+  if (modifier & MODIFIER_CONTROL_RIGHT) out |= MODIFIER_GUI_RIGHT;
+  if (modifier & MODIFIER_GUI_RIGHT) out |= MODIFIER_CONTROL_RIGHT;
+  return out;
+}
+
 const MACRO_RESET_KEYBOARD_STATE = {
   keys: new Array(hidKeyBufferSize).fill(0),
   modifier: 0,
@@ -53,6 +73,7 @@ export default function useKeyboard() {
   const rpcDataChannel = useRTCStore(state => state.rpcDataChannel);
   const rpcHidChannel = useRTCStore(state => state.rpcHidChannel);
   const forceHttp = useSettingsStore(state => state.forceHttp);
+  const swapCommandControl = useSettingsStore(state => state.swapCommandControl);
   const updateActiveKeysAndModifiers = useHidStore(
     state => state.updateActiveKeysAndModifiers,
   );
@@ -84,7 +105,17 @@ export default function useKeyboard() {
   } = useHidRpc(message => {
     switch (message.constructor) {
       case KeysDownStateMessage:
-        setKeysDownState((message as KeysDownStateMessage).keysDownState);
+        setKeysDownState(
+          swapCommandControl
+            ? {
+                ...(message as KeysDownStateMessage).keysDownState,
+                // The device reports the modifier byte it actually sent, which already
+                // carries the swap. Undo it here so the on-screen keyboard highlights
+                // the key the user pressed, not the key the host received.
+                modifier: swapControlAndCommand((message as KeysDownStateMessage).keysDownState.modifier),
+              }
+            : (message as KeysDownStateMessage).keysDownState,
+        );
         break;
       case KeyboardLedStateMessage:
         setKeyboardLedState((message as KeyboardLedStateMessage).keyboardLedState);
@@ -118,7 +149,10 @@ export default function useKeyboard() {
       if (!forceRelease && usbState !== "configured") return;
       // Bitwise OR, not addition: the modifier byte is a bitmask, so adding
       // duplicate values would corrupt it.
-      const accModifier = modifiers.reduce((acc, val) => acc | val, 0);
+      let accModifier = modifiers.reduce((acc, val) => acc | val, 0);
+      if (swapCommandControl) {
+        accModifier = swapControlAndCommand(accModifier);
+      }
 
       // Binary channel: same device-side handler as the "keyboardReport" RPC
       // (rpcKeyboardReport), without the JSON envelope and response pairing.
@@ -141,7 +175,7 @@ export default function useKeyboard() {
       // We do this for the info bar to display the currently pressed keys for the user
       updateActiveKeysAndModifiers({ keys: keys, modifiers: modifiers });
     },
-    [forceHttp, rpcDataChannel?.readyState, rpcHidReady, reportKeyboardEvent, send, updateActiveKeysAndModifiers, isReinitializingGadget, usbState, keyboardEnabled],
+    [forceHttp, rpcDataChannel?.readyState, rpcHidReady, reportKeyboardEvent, send, updateActiveKeysAndModifiers, isReinitializingGadget, usbState, keyboardEnabled, swapCommandControl],
   );
 
   // Send per-key press/release
@@ -197,9 +231,12 @@ export default function useKeyboard() {
     for (const [index, step] of steps.entries()) {
       const keyValues = (step.keys || []).map(key => keys[key]).filter(Boolean);
       // OR, not sum: the modifier byte is a bitmask.
-      const modifierMask: number = (step.modifiers || [])
+      let modifierMask: number = (step.modifiers || [])
         .map(mod => modifiers[mod])
         .reduce((acc, val) => acc | val, 0);
+      if (swapCommandControl) {
+        modifierMask = swapControlAndCommand(modifierMask);
+      }
 
       if (keyValues.length > 0 || modifierMask > 0) {
         macro.push({ keys: keyValues, modifier: modifierMask, delay: step.delay || 50 });
@@ -218,7 +255,7 @@ export default function useKeyboard() {
     }
 
     return macro;
-  }, []);
+  }, [swapCommandControl]);
 
   // executeMacroRemote hands the whole macro to the device. Timing then runs on
   // the device clock instead of browser timers, so a backgrounded tab cannot
