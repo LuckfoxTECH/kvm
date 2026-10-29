@@ -53,6 +53,36 @@ func setMassStorageImage(imagePath string) error {
 	return nil
 }
 
+// isMassStorageBusy reports whether configfs refused the write because the host
+// still holds the medium open.
+func isMassStorageBusy(err error) bool {
+	return errors.Is(err, syscall.EBUSY) ||
+		strings.Contains(err.Error(), "device or resource busy")
+}
+
+// forceEjectMassStorageLun asks the kernel to eject the medium on the host side.
+// A plain write of an empty backing file is refused with EBUSY for as long as the
+// host keeps the LUN open - a mounted filesystem, or a write cache it has not
+// flushed - and clearing lun.0/file alone can never succeed in that state. Linux
+// offers forced_eject for exactly this: it drops the host-side medium, which
+// releases the backing file without having to tear the whole gadget down.
+func forceEjectMassStorageLun() error {
+	lunPath, err := gadget.GetPath("mass_storage_lun0")
+	if err != nil {
+		return fmt.Errorf("failed to get mass storage path: %w", err)
+	}
+
+	ejectPath := path.Join(lunPath, "forced_eject")
+	if _, statErr := os.Stat(ejectPath); statErr != nil {
+		return fmt.Errorf("forced_eject not available: %w", statErr)
+	}
+
+	if err := writeFile(ejectPath, "1"); err != nil {
+		return fmt.Errorf("failed to force eject lun: %w", err)
+	}
+	return nil
+}
+
 func setMassStorageMode(cdrom bool) error {
 	mode := "0"
 	if cdrom {
@@ -200,31 +230,126 @@ func rpcGetVirtualMediaState() (*VirtualMediaState, error) {
 	return currentVirtualMediaState, nil
 }
 
-func rpcUnmountImage() error {
-	virtualMediaStateMutex.Lock()
-	defer virtualMediaStateMutex.Unlock()
-
-	var err error
-	for i := 0; i < 3; i++ {
-		err = setMassStorageImage("\n")
-		if err == nil {
-			break
+// detachMassStorageImage clears the LUN backing file. It returns an EBUSY error
+// when the host keeps the medium open and this kernel offers no way to eject it.
+func detachMassStorageImage() error {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		lastErr = setMassStorageImage("\n")
+		if lastErr == nil {
+			return nil
 		}
-		logger.Warn().Err(err).Int("attempt", i+1).Msg("unmount attempt failed, retrying...")
-		time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
+		if !isMassStorageBusy(lastErr) {
+			return lastErr
+		}
+
+		if attempt == 0 {
+			if ejectErr := forceEjectMassStorageLun(); ejectErr != nil {
+				// The gadget's configfs has no forced_eject, so retrying the same write can
+				// never succeed. Hand the EBUSY back and let the caller rebuild the gadget.
+				logger.Info().
+					Err(ejectErr).
+					Msg("forced_eject unavailable, the gadget must be rebuilt to release the medium")
+				return lastErr
+			}
+			logger.Info().Msg("forced eject of mass storage LUN succeeded, retrying detach")
+			// The host needs a moment to let go of the medium.
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		logger.Warn().Err(lastErr).Int("attempt", attempt+1).Msg("unmount attempt failed, retrying...")
+		time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
 	}
-	if err != nil {
-		logger.Warn().Err(err).Msg("Remove Mass Storage Image Error after retries")
-		return fmt.Errorf("device or resource busy")
+	return lastErr
+}
+
+// rpcUnmountImage detaches the current mass storage image on behalf of the user
+// and drops the auto-mount entry when it points to that image, otherwise the
+// image would be mounted again on the next boot.
+func rpcUnmountImage() error {
+	return unmountImage(true)
+}
+
+// unmountImage detaches the current mass storage image. clearAutoMount is only set
+// for user-initiated unmounts; internal paths (USB reinit, session close, gadget
+// device change) must keep the configured auto-mount image.
+func unmountImage(clearAutoMount bool) error {
+	virtualMediaStateMutex.Lock()
+
+	unmounted := currentVirtualMediaState
+
+	detachErr := detachMassStorageImage()
+	needGadgetRebuild := detachErr != nil && isMassStorageBusy(detachErr)
+	if detachErr != nil && !needGadgetRebuild {
+		virtualMediaStateMutex.Unlock()
+		logger.Warn().Err(detachErr).Msg("Remove Mass Storage Image Error")
+		return fmt.Errorf("failed to detach mass storage image: %w", detachErr)
 	}
 
-	time.Sleep(500 * time.Millisecond)
+	// Clear the state before any gadget rebuild: rpcReinitializeUsbGadget unmounts a
+	// mounted image by calling back into this function, and this mutex is not
+	// reentrant, so leaving the state set would deadlock on itself.
+	currentVirtualMediaState = nil
+	clearPersistedVirtualMediaState()
+	virtualMediaStateMutex.Unlock()
+
 	if nbdDevice != nil {
 		nbdDevice.Close()
 		nbdDevice = nil
 	}
-	currentVirtualMediaState = nil
-	clearPersistedVirtualMediaState()
+
+	if clearAutoMount {
+		clearAutoMountForUnmountedImage(unmounted)
+	}
+
+	if !needGadgetRebuild {
+		return nil
+	}
+
+	// rpcReinitializeUsbGadget detaches the image before rebuilding, so landing here
+	// from inside a rebuild means that rebuild already owns the recovery: it is about
+	// to replace the gadget anyway, and detaching the UDC underneath it would only
+	// fight it.
+	reinitLock.Lock()
+	rebuilding := isReinitializing
+	reinitLock.Unlock()
+	if rebuilding {
+		logger.Warn().Msg("gadget rebuild already in progress, leaving the mass storage detach to it")
+		return nil
+	}
+
+	// The host refuses to release the medium and this kernel cannot force an eject.
+	// Detaching the gadget from the UDC makes the host drop its handle, and the
+	// rebuild is what brings it back: unbinding alone leaves the HID nodes dead
+	// (/dev/hidg1 disappears) so the keyboard and mouse stay disconnected.
+	logger.Warn().Msg("mass storage is held by the host, detaching the gadget and rebuilding USB")
+	if err := gadget.UnbindUDC(); err != nil {
+		logger.Warn().Err(err).Msg("failed to unbind UDC")
+		return fmt.Errorf("failed to release mass storage: %w", err)
+	}
+
+	time.Sleep(200 * time.Millisecond)
+
+	if err := setMassStorageImage("\n"); err != nil {
+		logger.Warn().Err(err).Msg("failed to clear mass storage image after UDC unbind")
+	}
+
+	if err := rpcReinitializeUsbGadget(); err != nil {
+		logger.Error().Err(err).Msg("failed to rebuild USB gadget after mass storage detach")
+		return fmt.Errorf("failed to release mass storage: %w", err)
+	}
+
+	// rpcReinitializeUsbGadget recreates the configfs gadget but does not attach it,
+	// so bind the new instance by its UDC name or the host never sees it again. The
+	// dwc3 driver bind used by the emulation switch is the wrong half here: dwc3 is
+	// still bound, only the configfs UDC attachment was dropped.
+	if err := gadget.BindUDC(); err != nil {
+		logger.Error().Err(err).Msg("failed to rebind UDC after gadget rebuild")
+		return fmt.Errorf("failed to release mass storage: %w", err)
+	}
+
+	logger.Info().Msg("USB gadget rebuilt after releasing the mass storage medium")
 	return nil
 }
 
@@ -279,10 +404,68 @@ func setInitialVirtualMediaState() error {
 	if err != nil {
 		return fmt.Errorf("failed to get initial virtual media state: %w", err)
 	}
+
+	// system_info.img is provided through auto-mount only. If the user disabled
+	// auto-mount (auto_mount_image: null) the gadget may still expose it after an
+	// app restart, so detach it instead of resurrecting it.
+	if initialState != nil && initialState.Filename == systemInfoImageFilename && config.AutoMountImage == nil {
+		logger.Info().Msg("auto-mount disabled, detaching system_info.img from the gadget")
+		if err := setMassStorageImage("\n"); err != nil {
+			logger.Warn().Err(err).Msg("failed to detach system_info.img from the gadget")
+		} else {
+			clearPersistedVirtualMediaState()
+		}
+		currentVirtualMediaState = nil
+		return nil
+	}
+
 	currentVirtualMediaState = initialState
 
 	logger.Info().Interface("initial_virtual_media_state", initialState).Msg("initial virtual media state set")
 	return nil
+}
+
+// clearAutoMountForUnmountedImage clears the auto-mount entry when it points to
+// the image the user just unmounted.
+func clearAutoMountForUnmountedImage(unmounted *VirtualMediaState) {
+	if unmounted == nil || config.AutoMountImage == nil {
+		return
+	}
+
+	source := "kvm"
+	if unmounted.Source == SDStorage {
+		source = "sd"
+	}
+
+	if config.AutoMountImage.Filename != unmounted.Filename || config.AutoMountImage.Source != source {
+		return
+	}
+
+	config.AutoMountImage = nil
+	if err := SaveConfig(); err != nil {
+		logger.Warn().Err(err).Msg("failed to clear auto-mount config after unmount")
+	}
+}
+
+// clearPersistedAutoMountState drops the persisted virtual media entry when it
+// points to the image configured for auto-mount, so that disabling auto-mount also
+// stops the image from being remounted after a restart. Callers persist the config.
+func clearPersistedAutoMountState(autoMount *AutoMountImageConfig, persisted *VirtualMediaState) bool {
+	if autoMount == nil || persisted == nil {
+		return false
+	}
+
+	source := "kvm"
+	if persisted.Source == SDStorage {
+		source = "sd"
+	}
+
+	if persisted.Filename != autoMount.Filename || source != autoMount.Source {
+		return false
+	}
+
+	config.PersistedVirtualMediaState = nil
+	return true
 }
 
 func persistVirtualMediaState(state *VirtualMediaState) {
@@ -305,6 +488,17 @@ func remountPersistedVirtualMediaState() {
 	}
 
 	state := config.PersistedVirtualMediaState
+
+	// system_info.img is tracked by auto_mount_image only. Its persisted entry must
+	// not resurrect it: when the user disabled auto-mount (auto_mount_image: null)
+	// it has to stay unmounted, and when auto-mount is enabled initAutoMountImage
+	// mounts it anyway, after writeSystemInfoImg finished.
+	if state.Filename == systemInfoImageFilename {
+		logger.Info().Msg("dropping persisted virtual media state of system_info.img, auto-mount owns it")
+		clearPersistedVirtualMediaState()
+		return
+	}
+
 	logger.Info().Interface("state", state).Msg("attempting to remount persisted virtual media")
 
 	var err error
@@ -450,7 +644,11 @@ func rpcMountWithStorage(filename string, mode VirtualMediaMode) error {
 		Path:     fullPath,
 		Size:     fileInfo.Size(),
 	}
-	persistVirtualMediaState(currentVirtualMediaState)
+	// system_info.img is persisted through auto_mount_image only; a persisted entry
+	// would bypass the explicit null "disabled" marker after a restart.
+	if filename != systemInfoImageFilename {
+		persistVirtualMediaState(currentVirtualMediaState)
+	}
 	return nil
 }
 
