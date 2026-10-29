@@ -357,13 +357,33 @@ func ExtractAndRunVideoBin() error {
 	return nil
 }
 
-// Restore the HDMI EDID value from the config.
+// Restore the HDMI EDID from the config. The app is the source of truth: the
+// controller may ship its own EDID, and it is overwritten here so the configured
+// value always wins. On first boot there is no configured value yet, so the
+// built-in default is written to the config and used from then on.
 func restoreHdmiEdid() {
-	if config.EdidString != "" {
-		videoLogger.Info().Str("edid", config.EdidString).Msg("Restoring HDMI EDID")
-		_, err := CallCtrlAction("set_edid", map[string]interface{}{"edid": config.EdidString})
-		if err != nil {
-			videoLogger.Warn().Err(err).Msg("Failed to restore HDMI EDID")
+	edid := config.EdidString
+	if edid == "" {
+		edid = defaultEdidHex
+		config.EdidString = edid
+		if err := SaveConfig(); err != nil {
+			videoLogger.Warn().Err(err).Msg("Failed to persist default HDMI EDID")
+		} else {
+			videoLogger.Info().Msg("Persisted default HDMI EDID to config")
 		}
 	}
+
+	// The controller may not be ready right after the socket connects.
+	for attempt := 1; attempt <= 3; attempt++ {
+		_, err := CallCtrlAction("set_edid", map[string]interface{}{"edid": edid})
+		if err == nil {
+			videoLogger.Info().Int("attempt", attempt).Msg("Applied HDMI EDID from config")
+			return
+		}
+		videoLogger.Warn().Err(err).Int("attempt", attempt).Msg("Failed to apply HDMI EDID")
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+	}
+	videoLogger.Error().Msg("Giving up on applying HDMI EDID from config")
 }

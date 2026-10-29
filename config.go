@@ -280,6 +280,37 @@ type ConfigMigrationFunc func(raw json.RawMessage) (json.RawMessage, error)
 var configMigrations = []ConfigMigrationFunc{
 	migrateLocalAuthMode,
 	migrateDisplayBrightnessPercent,
+	migrateLegacyTruncatedEdid,
+}
+
+// migrateLegacyTruncatedEdid replaces the legacy 128-byte default EDID (base
+// block only, while byte 126 still announced one extension block) with the full
+// 256-byte default. A custom EDID set by the user is left untouched.
+func migrateLegacyTruncatedEdid(raw json.RawMessage) (json.RawMessage, error) {
+	var rawMap map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &rawMap); err != nil {
+		return nil, fmt.Errorf("migrateLegacyTruncatedEdid: failed to parse config JSON: %w", err)
+	}
+
+	edidRaw, exists := rawMap["hdmi_edid_string"]
+	if !exists {
+		return json.Marshal(rawMap)
+	}
+
+	var edid string
+	if err := json.Unmarshal(edidRaw, &edid); err != nil {
+		return nil, fmt.Errorf("migrateLegacyTruncatedEdid: failed to parse hdmi_edid_string: %w", err)
+	}
+	if !strings.EqualFold(edid, legacyTruncatedEdidHex) {
+		return json.Marshal(rawMap)
+	}
+
+	encoded, err := json.Marshal(defaultEdidHex)
+	if err != nil {
+		return nil, fmt.Errorf("migrateLegacyTruncatedEdid: failed to encode default EDID: %w", err)
+	}
+	rawMap["hdmi_edid_string"] = encoded
+	return json.Marshal(rawMap)
 }
 
 // migrateDisplayBrightnessPercent replaces the legacy raw backlight level

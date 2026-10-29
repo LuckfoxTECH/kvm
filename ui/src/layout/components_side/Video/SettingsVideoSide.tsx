@@ -16,13 +16,13 @@ const { Text } = Typography;
 
 
 
-const defaultEdid =
-  "00ffffffffffff0052620188008888881c150103800000780a0dc9a05747982712484c00000001010101010101010101010101010101023a801871382d40582c4500c48e2100001e011d007251d01e206e285500c48e2100001e000000fc00543734392d6648443732300a20000000fd00147801ff1d000a202020202020017b";
-const edids = [
-  {
-    value: defaultEdid.toUpperCase(),
-    label: "KVM Default",
-  },
+// normalizeEdid lowercases, strips whitespace and an optional 0x prefix so two
+// representations of the same EDID compare equal.
+const normalizeEdid = (value: string) => value.trim().replace(/^0x/i, "").replace(/\s+/g, "").toLowerCase();
+
+// builtinEdids are extra presets. "KVM Default" is not listed here: it comes from
+// the backend (getDefaultEDID) so the UI and the device never disagree.
+const builtinEdids = [
   {
     value:
       "00FFFFFFFFFFFF00047265058A3F6101101E0104A53420783FC125A8554EA0260D5054BFEF80714F8140818081C081008B009500B300283C80A070B023403020360006442100001A000000FD00304C575716010A202020202020000000FC0042323436574C0A202020202020000000FF0054384E4545303033383532320A01F802031CF14F90020304050607011112131415161F2309070783010000011D8018711C1620582C250006442100009E011D007251D01E206E28550006442100001E8C0AD08A20E02D10103E9600064421000018C344806E70B028401720A80406442100001E00000000000000000000000000000000000000000000000000000096",
@@ -181,6 +181,7 @@ export default function SettingsVideoSide() {
   const [streamEncodecType, setStreamEncodecType] = useState("avc");
   const [customEdidValue, setCustomEdidValue] = useState<string | null>(null);
   const [edid, setEdid] = useState<string | null>(null);
+  const [defaultEdid, setDefaultEdid] = useState<string | null>(null);
   const [forceHpd, setForceHpd] = useState(false);
   const [videoRcConfig, setVideoRcConfig] = useState<VideoRcConfig>(DEFAULT_VIDEO_RC_CONFIG);
   const [rcSliderValues, setRcSliderValues] = useState<RcSliderState>(
@@ -350,27 +351,50 @@ export default function SettingsVideoSide() {
       setRcSliderValues(sliderStateFromConfig(rc));
     });
 
-    send("getEDID", {}, resp => {
-      if ("error" in resp) {
-        notifications.error(`Failed to get EDID: ${resp.error.data || "Unknown error"}`);
-        return;
-      }
+    // The backend owns the default EDID, so fetch it before comparing values.
+    send("getDefaultEDID", {}, defaultResp => {
+      const backendDefault =
+        "error" in defaultResp || typeof defaultResp.result !== "string"
+          ? null
+          : (defaultResp.result as string);
+      setDefaultEdid(backendDefault);
 
-      const receivedEdid = resp.result as string;
+      const knownEdids = [
+        ...(backendDefault ? [{ value: backendDefault, label: "KVM Default" }] : []),
+        ...builtinEdids,
+      ];
 
-      const matchingEdid = edids.find(
-        x => x.value.toLowerCase() === receivedEdid.toLowerCase(),
-      );
+      send("getEDID", {}, resp => {
+        if ("error" in resp) {
+          notifications.error(`Failed to get EDID: ${resp.error.data || "Unknown error"}`);
+          return;
+        }
 
-      if (matchingEdid) {
-        // EDID is stored in uppercase in the UI
-        setEdid(matchingEdid.value.toUpperCase());
-        // Reset custom EDID value
-        setCustomEdidValue(null);
-      } else {
-        setEdid("custom");
-        setCustomEdidValue(receivedEdid);
-      }
+        const receivedEdid = resp.result as string;
+        const receivedNormalized =
+          typeof receivedEdid === "string" ? normalizeEdid(receivedEdid) : "";
+
+        const matchingEdid = knownEdids.find(
+          x => normalizeEdid(x.value) === receivedNormalized,
+        );
+
+        if (!matchingEdid) {
+          console.debug("[EDID] device value does not match a known preset", {
+            receivedLen: typeof receivedEdid === "string" ? receivedEdid.length : -1,
+            defaultLen: backendDefault ? backendDefault.length : -1,
+          });
+        }
+
+        if (matchingEdid) {
+          // EDID is stored in uppercase in the UI
+          setEdid(matchingEdid.value.toUpperCase());
+          // Reset custom EDID value
+          setCustomEdidValue(null);
+        } else {
+          setEdid("custom");
+          setCustomEdidValue(receivedEdid);
+        }
+      });
     });
 
     send("getForceHpd", {}, resp => {
@@ -441,7 +465,13 @@ export default function SettingsVideoSide() {
     });
   };
 
-  const handleEDIDChange = (newEdid: string) => {
+  // Select options: the backend default first, then the built-in presets.
+  const edidOptions = [
+    ...(defaultEdid ? [{ value: defaultEdid.toUpperCase(), label: "KVM Default" }] : []),
+    ...builtinEdids,
+  ];
+
+  const handleEDIDChange = (newEdid: string, label?: string) => {
     send("setEDID", { edid: newEdid }, resp => {
       if ("error" in resp) {
         notifications.error(`Failed to set EDID: ${resp.error.data || "Unknown error"}`);
@@ -449,10 +479,24 @@ export default function SettingsVideoSide() {
       }
 
       notifications.success(
-        `EDID set successfully to ${edids.find(x => x.value === newEdid)?.label}`,
+        `EDID set successfully to ${label ?? edidOptions.find(x => normalizeEdid(x.value) === normalizeEdid(newEdid))?.label ?? "custom EDID"}`,
       );
       // Update the EDID value in the UI
       setEdid(newEdid);
+    });
+  };
+
+  // Restore to the backend default (empty string tells the backend to use it).
+  const handleRestoreDefaultEDID = () => {
+    send("setEDID", { edid: "" }, resp => {
+      if ("error" in resp) {
+        notifications.error(`Failed to restore default EDID: ${resp.error.data || "Unknown error"}`);
+        return;
+      }
+
+      notifications.success("EDID restored to default");
+      setCustomEdidValue(null);
+      setEdid(defaultEdid ? defaultEdid.toUpperCase() : null);
     });
   };
 
@@ -728,11 +772,10 @@ export default function SettingsVideoSide() {
           <Select
             className={isMobile ? "w-full bg-transparent" : ""}
 
-            defaultValue={customEdidValue ? "custom" : edid || "asd"}
-            value={customEdidValue ? "custom" : edid || "asd"}
+            defaultValue={customEdidValue !== null ? "custom" : edid ?? undefined}
+            value={customEdidValue !== null ? "custom" : edid ?? undefined}
             optionLabelProp={"label"}
             onChange={e => {
-                  console.log(e)
               if (e === "custom") {
                 setEdid("custom");
                 setCustomEdidValue("");
@@ -741,7 +784,7 @@ export default function SettingsVideoSide() {
                 handleEDIDChange(e);
               }
             }}
-            options={[...edids, { value: "custom", label: "Custom" }]}
+            options={[...edidOptions, { value: "custom", label: "Custom" }]}
           />
         </SettingsItem>
 
@@ -771,8 +814,7 @@ export default function SettingsVideoSide() {
                   whiteSpace: "nowrap",
                 }}
                 onClick={() => {
-                  setCustomEdidValue(null);
-                  handleEDIDChange(defaultEdid.toUpperCase());
+                  handleRestoreDefaultEDID();
                 }}
 
               ><div  className={"text-[rgba(28,168,0,1)]"}>{$at("Restore to default")}</div></AntdButton>

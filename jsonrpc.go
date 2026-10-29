@@ -425,10 +425,21 @@ func rpcGetEDID() (string, error) {
 	return "", errors.New("EDID not found in response")
 }
 
+// defaultEdidHex is the EDID the app reports when nothing else is configured.
+// It is a full 256-byte EDID: a 128-byte base block followed by a 128-byte
+// CEA-861 extension block. Byte 126 (extension count) must stay consistent with
+// the length, otherwise hosts may reject the EDID.
+const defaultEdidHex = "00ffffffffffff0052620188008888881c150103800000780a0dc9a05747982712484c00000001010101010101010101010101010101023a801871382d40582c4500c48e2100001e011d007251d01e206e285500c48e2100001e000000fc00543734392d6648443732300a20000000fd00147801ff1d000a202020202020017b02031a714790040201112205230907018301000065030c0010008c0ad08a20e02d10103e9600138e2100001ed80980a020e02d101060a200c48e210000188c0ad090204031200c405500483900000018011d801871382d40582c4500c06c00000018011d8018711c1620582c2500c06c00000018000000000000000000000032"
+
+// legacyTruncatedEdidHex is the base block of defaultEdidHex. Older builds used
+// only this prefix as the default, which produced an EDID that announced one
+// extension block without carrying it.
+var legacyTruncatedEdidHex = defaultEdidHex[:256]
+
 func rpcSetEDID(edid string) error {
 	if edid == "" {
 		logger.Info().Msg("Restoring EDID to default")
-		edid = "00ffffffffffff0052620188008888881c150103800000780a0dc9a05747982712484c00000001010101010101010101010101010101023a801871382d40582c4500c48e2100001e011d007251d01e206e285500c48e2100001e000000fc00543734392d6648443732300a20000000fd00147801ff1d000a202020202020017b"
+		edid = defaultEdidHex
 	} else {
 		logger.Info().Str("edid", edid).Msg("Setting EDID")
 	}
@@ -441,6 +452,10 @@ func rpcSetEDID(edid string) error {
 	config.EdidString = edid
 	_ = SaveConfig()
 	return nil
+}
+
+func rpcGetDefaultEDID() (string, error) {
+	return defaultEdidHex, nil
 }
 
 func rpcSetForceHpd(forceHpd bool) error {
@@ -2048,6 +2063,7 @@ var rpcHandlers = map[string]RPCHandler{
 	"getStreamQualityFactor":    {Func: rpcGetStreamQualityFactor},
 	"setStreamQualityFactor":    {Func: rpcSetStreamQualityFactor, Params: []string{"factor"}},
 	"getEDID":                   {Func: rpcGetEDID},
+	"getDefaultEDID":            {Func: rpcGetDefaultEDID},
 	"setEDID":                   {Func: rpcSetEDID, Params: []string{"edid"}},
 	"setForceHpd":               {Func: rpcSetForceHpd, Params: []string{"forceHpd"}},
 	"getForceHpd":               {Func: rpcGetForceHpd},
