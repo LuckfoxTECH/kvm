@@ -65,6 +65,12 @@ export default defineConfig(({ mode, command }) => {
             "/storage": KVM_PROXY_URL,
             "/cloud": KVM_PROXY_URL,
             "/developer": KVM_PROXY_URL,
+            // REST channel: forceHttp JSON-RPC (/api/rpc) and the MCP
+            // management endpoints (/api/mcp/*). Without this the SPA
+            // fallback answers with index.html instead of a 404.
+            "/api": KVM_PROXY_URL,
+            // MJPEG fallback stream; long-lived response, never buffered.
+            "/video": KVM_PROXY_URL,
           }
         : undefined,
     },
