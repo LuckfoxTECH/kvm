@@ -5,6 +5,7 @@ import RefreshSvg from "@assets/second/refresh.svg?react";
 
 import { useHidStore } from "@/hooks/stores";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
+import { bumpUsbEmulationEpoch, currentUsbEmulationEpoch } from "@/hooks/usbStateEpoch";
 import notifications from "@/notifications";
 import { StatusPanelRow, StatusPanelSection } from "@/layout/core/bar_bottom/StatusPanel";
 
@@ -33,11 +34,16 @@ export default function UsbFunctionsPanel({ extended, dim = false }: UsbFunction
   const [enhancedDetection, setEnhancedDetection] = useState(false);
 
   useEffect(() => {
+    const issuedAt = currentUsbEmulationEpoch();
     send("getUsbEmulationState", {}, resp => {
       if ("error" in resp) {
         console.warn("Failed to load USB emulation state:", resp.error);
         return;
       }
+      // The switch may have been flipped while this query was in flight. Its
+      // answer then describes the state before that flip; applying it would
+      // revert the switch and close the input gates.
+      if (issuedAt !== currentUsbEmulationEpoch()) return;
       setEmulationEnabled(resp.result as boolean);
       setUsbEmulationEnabled(Boolean(resp.result));
     });
@@ -67,6 +73,9 @@ export default function UsbFunctionsPanel({ extended, dim = false }: UsbFunction
 
   const handleEmulationToggle = useCallback(
     (enabled: boolean) => {
+      // Bump before the request so any emulation query still in flight is
+      // stale by definition: it cannot describe the state this switch sets.
+      bumpUsbEmulationEpoch();
       send("setUsbEmulationState", { enabled }, resp => {
         if ("error" in resp) {
           notifications.error(

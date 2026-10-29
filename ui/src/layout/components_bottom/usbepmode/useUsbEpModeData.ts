@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAudioModeStore, useHidStore, useSettingsStore, useUsbEpModeStore } from "@/hooks/stores";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
+import { bumpUsbDeviceConfigEpoch, currentUsbDeviceConfigEpoch, currentUsbEmulationEpoch } from "@/hooks/usbStateEpoch";
 import notifications from "@/notifications";
 
 import { UsbDeviceConfig, defaultUsbDeviceConfig } from "./usbModeOptions";
@@ -60,6 +61,7 @@ export function useUsbEpModeData(): UsbEpModeData {
   const [usbDeviceConfig, setUsbDeviceConfig] = useState<UsbDeviceConfig>(defaultUsbDeviceConfig);
 
   const syncUsbDeviceConfig = useCallback(() => {
+    const issuedAt = currentUsbDeviceConfigEpoch();
     send("getUsbDevices", {}, resp => {
       if ("error" in resp) {
         console.error("Failed to load USB devices:", resp.error);
@@ -67,6 +69,10 @@ export function useUsbEpModeData(): UsbEpModeData {
           `Failed to load USB devices: ${resp.error.data || "Unknown error"}`,
         );
       } else {
+        // Dropped when a device change started after this query: its answer
+        // describes the composition that change replaced, and applying it
+        // would rewrite deviceConfigRef and reopen the input gates mid-flight.
+        if (issuedAt !== currentUsbDeviceConfigEpoch()) return;
         const usbConfigState = resp.result as UsbDeviceConfig;
         setUsbDeviceConfig(usbConfigState);
         deviceConfigRef.current = usbConfigState;
@@ -86,17 +92,24 @@ export function useUsbEpModeData(): UsbEpModeData {
   // well. Read it once on mount: useUsbEpModeData is kept alive for the bar's
   // lifetime, so the flag is authoritative even while the drawer is closed.
   useEffect(() => {
+    const issuedAt = currentUsbEmulationEpoch();
     send("getUsbEmulationState", {}, resp => {
       if ("error" in resp) {
         console.error("Failed to load USB emulation state:", resp.error);
         return;
       }
+      // Dropped when the emulation switch moved on while this query was in
+      // flight: the stale answer would restore `false` and gate input off.
+      if (issuedAt !== currentUsbEmulationEpoch()) return;
       setUsbEmulationEnabled(Boolean(resp.result));
     });
   }, [send, setUsbEmulationEnabled]);
 
   const handleUsbConfigChange = useCallback(
     (devices: UsbDeviceConfig) => {
+      // Bump before the request so a device query still in flight is stale by
+      // definition: it cannot describe the composition this change sets.
+      bumpUsbDeviceConfigEpoch();
       setLoading(true);
       // A change that touches the keyboard or the mouse detaches those HID
       // interfaces for a moment. Suspend local capture immediately instead of
@@ -116,6 +129,10 @@ export function useUsbEpModeData(): UsbEpModeData {
             `Failed to set usb devices: ${resp.error.data || "Unknown error"}`,
           );
           setLoading(false);
+          // Nothing was applied, so the gates were suspended for a change that
+          // never happened. The backstop is a reread rather than an assumption:
+          // it runs after the bump above, so its answer is the current one.
+          syncUsbDeviceConfig();
           return;
         }
         await new Promise(resolve => setTimeout(resolve, 2000));
