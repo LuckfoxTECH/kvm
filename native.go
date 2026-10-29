@@ -64,6 +64,11 @@ var (
 // Buffered to 1 so the jpeg thread doesn't block if captureScreenshot has already timed out.
 var jpegReadyCh = make(chan struct{}, 1)
 
+// jpegFailedCh carries the reason a pending snapshot can never complete. Native sends
+// it from every path that would otherwise stay silent: encoder not running,
+// VENC_GetStream giving up, unwritable spool file, uninitialised JPEG channel.
+var jpegFailedCh = make(chan string, 1)
+
 func CallCtrlAction(action string, params map[string]interface{}) (*CtrlResponse, error) {
 	lock.Lock()
 	defer lock.Unlock()
@@ -235,6 +240,20 @@ func handleCtrlClient(conn net.Conn) {
 		case "jpeg_ready":
 			select {
 			case jpegReadyCh <- struct{}{}:
+			default:
+			}
+		case "jpeg_failed":
+			reason := "native reported a failed capture"
+			if ctrlResp.Data != nil {
+				var payload struct {
+					Error string `json:"error"`
+				}
+				if json.Unmarshal(ctrlResp.Data, &payload) == nil && payload.Error != "" {
+					reason = payload.Error
+				}
+			}
+			select {
+			case jpegFailedCh <- reason:
 			default:
 			}
 		}

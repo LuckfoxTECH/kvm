@@ -419,6 +419,17 @@ var keyNameToCode = map[string]uint8{
 	"Up":          0x52,
 }
 
+// shiftedSymbols maps every printable ASCII character that needs Shift on a US
+// layout to the usage ID of the key it sits on. Without this table charToKeyCode
+// silently dropped all of them, so `echo a > f && cat f` arrived as
+// `echo a f cat f`: the redirect and the && never reached the host.
+var shiftedSymbols = map[uint8]uint8{
+	'!': 0x1E, '@': 0x1F, '#': 0x20, '$': 0x21, '%': 0x22,
+	'^': 0x23, '&': 0x24, '*': 0x25, '(': 0x26, ')': 0x27,
+	'_': 0x2D, '+': 0x2E, '{': 0x2F, '}': 0x30, '|': 0x31,
+	':': 0x33, '"': 0x34, '~': 0x35, '<': 0x36, '>': 0x37, '?': 0x38,
+}
+
 func charToKeyCode(char uint8) (keyCode uint8, modifier uint8, ok bool) {
 	if char >= 'a' && char <= 'z' {
 		return keyNameToCode[string(char)], 0, true
@@ -456,6 +467,13 @@ func charToKeyCode(char uint8) (keyCode uint8, modifier uint8, ok bool) {
 	case '/':
 		return 0x38, 0, true
 	}
+
+	// Shifted punctuation. The table is keyed by the character itself, so the
+	// caller does not have to know which key it sits on.
+	if code, found := shiftedSymbols[char]; found {
+		return code, 0x02, true
+	}
+
 	return 0, 0, false
 }
 

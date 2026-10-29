@@ -159,17 +159,18 @@ func handleAPIMouseClick(c *gin.Context) {
 
 func handleAPIMouseScroll(c *gin.Context) {
 	var req struct {
-		Delta int8 `json:"delta" binding:"required"`
+		Delta  int8 `json:"delta" binding:"required"`
+		WheelX int8 `json:"wheelX"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := wheelScroll(req.Delta, mouseModeAbsolute); err != nil {
+	if err := wheelScroll(req.Delta, req.WheelX, mouseModeAbsolute); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "delta": req.Delta})
+	c.JSON(http.StatusOK, gin.H{"success": true, "delta": req.Delta, "wheelX": req.WheelX})
 }
 
 func handleAPIKeyboardKey(c *gin.Context) {
@@ -181,7 +182,7 @@ func handleAPIKeyboardKey(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	keyCode, ok := keyNameToCode[req.Key]
+	keyCode, ok := lookupKeyCode(req.Key)
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("unknown key: %s", req.Key)})
 		return

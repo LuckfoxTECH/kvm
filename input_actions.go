@@ -21,6 +21,13 @@ const (
 	// maxTypeTextLength caps a single type_text call so one request cannot
 	// keep the remote keyboard busy for minutes.
 	maxTypeTextLength = 1000
+
+	// reportGap separates a press report from its release report. The gadget
+	// coalesces two reports that arrive inside the same USB frame, and the remote
+	// host then sees only one of them: the keystroke disappears or the key stays
+	// held down and repeats forever. Waiting longer than one frame (1 ms) costs
+	// nothing noticeable but removes both failure modes.
+	reportGap = 15 * time.Millisecond
 )
 
 // === Mouse ===
@@ -41,13 +48,14 @@ func relMouse(dx, dy int8, buttons uint8) error {
 	return err
 }
 
-// wheelScroll sends a single wheel report for the given mouse mode.
-func wheelScroll(steps int8, mouseMode string) error {
-	if mouseMode != mouseModeRelative {
-		mouseMode = mouseModeAbsolute
-	}
+// wheelScroll sends a single wheel report. The device picks the report channel
+// from the gadget's capabilities (see rpcWheelReport in usb.go), so mouseMode is
+// advisory only. It stays in the signature so the MCP and HTTP contracts do not
+// change, but it must not be forwarded: wheelReport accepts wheelY and wheelX
+// only, and passing an unknown parameter fails the call.
+func wheelScroll(steps int8, wheelX int8, _ string) error {
 	_, err := callRPCHandler(rpcHandlers["wheelReport"], map[string]interface{}{
-		"wheelY": steps, "mouseMode": mouseMode,
+		"wheelY": steps, "wheelX": wheelX,
 	})
 	return err
 }
@@ -85,8 +93,14 @@ func clickMouse(button string, clicks int) error {
 		if err := absMouse(x, y, bit); err != nil {
 			return err
 		}
+		// a release in the same USB frame as the press is coalesced away, the
+		// click is then lost or the button stays pressed
+		time.Sleep(reportGap)
 		if err := absMouse(x, y, 0); err != nil {
 			return err
+		}
+		if i < clicks-1 {
+			time.Sleep(reportGap)
 		}
 	}
 	return nil
@@ -116,6 +130,38 @@ func moveMouseToPixel(x, y int) (px, py int, err error) {
 	return px, py, nil
 }
 
+// maxRelativeStep is the largest delta one HID relative report can carry.
+const maxRelativeStep = 127
+
+// maxRelativeMove bounds a single call, so the loop below cannot be turned into
+// a long spin by an absurd argument.
+const maxRelativeMove = 2047
+
+// moveMouseRelative moves the pointer by a signed pixel delta, split into as
+// many HID reports as the delta needs: the report field is signed 8-bit, so a
+// 1000 px move is eight reports, not a silent clamp to 127. It returns the delta
+// that was actually applied.
+func moveMouseRelative(dx, dy int) (int, int, error) {
+	appliedX := clampInt(dx, -maxRelativeMove, maxRelativeMove)
+	appliedY := clampInt(dy, -maxRelativeMove, maxRelativeMove)
+
+	remainingX, remainingY := appliedX, appliedY
+	for remainingX != 0 || remainingY != 0 {
+		stepX := clampInt(remainingX, -maxRelativeStep, maxRelativeStep)
+		stepY := clampInt(remainingY, -maxRelativeStep, maxRelativeStep)
+		if err := relMouse(int8(stepX), int8(stepY), 0); err != nil {
+			return 0, 0, err
+		}
+		remainingX -= stepX
+		remainingY -= stepY
+		if remainingX != 0 || remainingY != 0 {
+			// the remote USB HID stack drops reports sent back to back
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	return appliedX, appliedY, nil
+}
+
 // === Keyboard ===
 
 // keyboardReport sends a keyboard report without releasing it, so a caller can
@@ -127,11 +173,14 @@ func keyboardReport(modifier uint8, keys []uint8) error {
 	return err
 }
 
-// tapKeys presses the given keys and releases everything again.
+// tapKeys presses the given keys and releases everything again. The two reports
+// are separated by reportGap: writing them back to back lets the gadget merge
+// them into one, which drops the keystroke or leaves the key held down.
 func tapKeys(modifier uint8, keys []uint8) error {
 	if err := keyboardReport(modifier, keys); err != nil {
 		return err
 	}
+	time.Sleep(reportGap)
 	return releaseKeys()
 }
 
@@ -141,6 +190,8 @@ func releaseKeys() error {
 }
 
 var modifierBits = map[string]uint8{
+	// Bare names keep working and mean the left side, so existing callers and
+	// trained models keep behaving the same.
 	"ctrl":    0x01,
 	"control": 0x01,
 	"shift":   0x02,
@@ -148,22 +199,94 @@ var modifierBits = map[string]uint8{
 	"meta":    0x08,
 	"win":     0x08,
 	"cmd":     0x08,
+
+	// Per-side names. The modifier byte has a distinct bit per side, so a right
+	// shift or a right Alt (AltGr on JIS layouts) cannot be expressed by the bare
+	// names at all, no matter how the caller spells them.
+	"ctrlleft":     0x01,
+	"controlleft":  0x01,
+	"shiftleft":    0x02,
+	"altleft":      0x04,
+	"metaleft":     0x08,
+	"winleft":      0x08,
+	"cmdleft":      0x08,
+	"ctrlright":    0x10,
+	"controlright": 0x10,
+	"shiftright":   0x20,
+	"altright":     0x40, // AltGr on JIS and most European layouts
+	"altgr":        0x40,
+	"metaright":    0x80,
+	"winright":     0x80,
+	"cmdright":     0x80,
 }
 
 // parseCombo splits key names into modifier bits and HID key codes.
 func parseCombo(keyNames []string) (modifier uint8, keys []uint8, err error) {
 	for _, name := range keyNames {
-		if bit, ok := modifierBits[strings.ToLower(name)]; ok {
+		if bit, ok := keyModifier(name); ok {
 			modifier |= bit
 			continue
 		}
-		code, ok := keyNameToCode[name]
+		code, shift, ok := lookupKeyCodeWithShift(name)
 		if !ok {
 			return 0, nil, fmt.Errorf("unknown key: %s", name)
 		}
+		// A character that sits on a shifted key brings its own Shift bit: ctrl and
+		// "+" is Ctrl+Shift+= on a US layout, which is what zooms a browser in.
+		modifier |= shift
 		keys = append(keys, code)
 	}
 	return modifier, keys, nil
+}
+
+// lowercaseKeyCodes mirrors keyNameToCode with lower case names, so a caller
+// that writes "enter" or "pageup" is understood instead of punished. Models
+// spell key names however the vendor they were trained on spelled them.
+var lowercaseKeyCodes = func() map[string]uint8 {
+	codes := make(map[string]uint8, len(keyNameToCode))
+	for name, code := range keyNameToCode {
+		lower := strings.ToLower(name)
+		// single letters keep their meaning; the shift modifier decides the case
+		if _, taken := codes[lower]; !taken {
+			codes[lower] = code
+		}
+	}
+	return codes
+}()
+
+// lookupKeyCode resolves a key name to a bare HID code, case-insensitively. A
+// single punctuation character means the key it sits on, so "-" is Minus. A
+// character that needs Shift is rejected here instead of returning the
+// unshifted key, because this result carries no modifier: use parseCombo, which
+// folds the Shift bit in.
+func lookupKeyCode(name string) (uint8, bool) {
+	code, shift, ok := lookupKeyCodeWithShift(name)
+	if !ok || shift != 0 {
+		return 0, false
+	}
+	return code, true
+}
+
+// lookupKeyCodeWithShift also reports the Shift bit a character needs. Named
+// keys (Enter, Minus, F1) never need one; punctuation falls through to
+// charToKeyCode, the same table type_text uses.
+func lookupKeyCodeWithShift(name string) (keyCode uint8, shift uint8, ok bool) {
+	if code, found := keyNameToCode[name]; found {
+		return code, 0, true
+	}
+	if code, found := lowercaseKeyCodes[strings.ToLower(name)]; found {
+		return code, 0, true
+	}
+	if runes := []rune(name); len(runes) == 1 && runes[0] <= 0x7F {
+		return charToKeyCode(uint8(runes[0]))
+	}
+	return 0, 0, false
+}
+
+// keyModifier resolves a modifier name to its report bit.
+func keyModifier(name string) (uint8, bool) {
+	bit, ok := modifierBits[strings.ToLower(name)]
+	return bit, ok
 }
 
 // typeASCIIText types the text one character at a time. The whole string is
@@ -195,8 +318,10 @@ func typeASCIIText(text string, delay time.Duration) error {
 		if err := tapKeys(modifiers[i], []uint8{codes[i]}); err != nil {
 			return err
 		}
-		if delay > 0 && i < len(codes)-1 {
-			time.Sleep(delay)
+		// tapKeys already waited reportGap after the press, so only the rest of the
+		// requested rhythm has to be added
+		if gap := delay - reportGap; gap > 0 && i < len(codes)-1 {
+			time.Sleep(gap)
 		}
 	}
 	return nil

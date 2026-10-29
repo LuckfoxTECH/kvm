@@ -16,15 +16,22 @@ import (
 type mcpInput struct{}
 
 func (mcpInput) MoveToPixel(x, y int) (int, int, error) { return moveMouseToPixel(x, y) }
-func (mcpInput) MoveRelative(dx, dy int8) error         { return relMouse(dx, dy, 0) }
-func (mcpInput) Click(button string, clicks int) error  { return clickMouse(button, clicks) }
-func (mcpInput) Scroll(steps int8, mouseMode string) error {
-	return wheelScroll(steps, mouseMode)
+func (mcpInput) MoveRelative(dx, dy int) (int, int, error) {
+	return moveMouseRelative(dx, dy)
+}
+func (mcpInput) Click(button string, clicks int) error { return clickMouse(button, clicks) }
+func (mcpInput) Scroll(steps int8, wheelX int8, mouseMode string) error {
+	return wheelScroll(steps, wheelX, mouseMode)
 }
 
 func (mcpInput) KeyCode(name string) (uint8, bool) {
-	code, ok := keyNameToCode[name]
-	return code, ok
+	return lookupKeyCode(name)
+}
+
+// ModifierBit lets keyboard_key press and hold a modifier on its own, not only
+// as part of a combo.
+func (mcpInput) ModifierBit(name string) (uint8, bool) {
+	return keyModifier(name)
 }
 
 func (mcpInput) KeyboardReport(modifier uint8, keys []uint8) error {
@@ -43,6 +50,36 @@ func (mcpInput) TypeText(text string, delay time.Duration) error {
 
 func (mcpInput) AbsPosition() (int, int) { return gadget.GetAbsMousePosition() }
 func (mcpInput) MaxTextLength() int      { return maxTypeTextLength }
+
+// KeysDownState exposes what the HID layer actually holds, so a test can assert
+// on the real modifier byte instead of inferring it from the reports it sent.
+func (mcpInput) KeysDownState() (uint8, []uint8) {
+	state := gadget.GetKeysDownState()
+	keys := make([]uint8, 0, len(state.Keys))
+	for _, code := range state.Keys {
+		// the report is a fixed six-slot array; the padding zeros are not keys
+		if code != 0 {
+			keys = append(keys, code)
+		}
+	}
+	return state.Modifier, keys
+}
+
+// KeyboardLedState exposes the LED byte the host last sent, so a caller can tell
+// whether the lock lights it sees are the host's or just the default zero.
+func (mcpInput) KeyboardLedState() mcp.KeyboardLeds {
+	state := gadget.GetKeyboardState()
+	return mcp.KeyboardLeds{
+		Raw:        state.Byte(),
+		Reported:   state.Reported,
+		NumLock:    state.NumLock,
+		CapsLock:   state.CapsLock,
+		ScrollLock: state.ScrollLock,
+		Compose:    state.Compose,
+		Kana:       state.Kana,
+		Shift:      state.Shift,
+	}
+}
 
 // mcpScreen adapts the capture path.
 type mcpScreen struct{}

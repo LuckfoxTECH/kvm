@@ -24,7 +24,7 @@ import (
 
 // Limits shared by the tool schemas, the handlers and the HTTP guards.
 const (
-	// DefaultPort is the TCP port the SSE transport listens on.
+	// DefaultPort is the TCP port the MCP transports listen on.
 	DefaultPort = 8081
 
 	// MaxRequestBytes caps one MCP HTTP request body so a malformed or hostile
@@ -52,6 +52,21 @@ const (
 	// unpredictably, so it is rejected instead of clamped silently.
 	maxWheelSteps = 100
 
+	// A burst repeats that single report, because a real wheel gesture is a run
+	// of small reports rather than one large value: a measured gesture on macOS
+	// Chrome is 15-17 wheel events 17ms apart, each carrying 100-200 deltaY,
+	// and one event moves the page about 70-76px.
+	//
+	// The gap between reports is what the browser needs to scroll one full step.
+	// Measured on a 1080p host with delta=1: 16ms apart moves 75-115px per report
+	// and varies by over 50% between runs, because the smooth-scroll animation is
+	// interrupted by the next report before it settles. At 100ms apart a report
+	// moves about 130px with under 10% variation between runs.
+	defaultWheelRepeat     = 10
+	maxWheelRepeat         = 200
+	defaultWheelIntervalMs = 100
+	maxWheelIntervalMs     = 1000
+
 	defaultShotTimeoutMs = 5000
 	minShotTimeoutMs     = 1000
 	maxShotTimeoutMs     = 30000
@@ -72,6 +87,21 @@ type VideoState struct {
 	Error  string
 }
 
+// KeyboardLeds is the LED byte the host last sent to the emulated keyboard. The
+// host only sends it when the lights change, so a freshly started process can
+// report every light as "off" without ever having heard from the host. Reported
+// is false until the first LED output report arrives.
+type KeyboardLeds struct {
+	Raw        uint8
+	Reported   bool
+	NumLock    bool
+	CapsLock   bool
+	ScrollLock bool
+	Compose    bool
+	Kana       bool
+	Shift      bool
+}
+
 // Input is the HID surface of the device. Every method maps to one primitive in
 // the daemon's input_actions.go, which is also what the local CLI API calls, so
 // both surfaces keep identical semantics.
@@ -79,14 +109,19 @@ type Input interface {
 	// MoveToPixel moves the absolute pointer to a pixel of the video input and
 	// returns the coordinate after clamping.
 	MoveToPixel(x, y int) (px, py int, err error)
-	// MoveRelative moves the pointer by one signed 8-bit HID step.
-	MoveRelative(dx, dy int8) error
+	// MoveRelative moves the pointer by a signed pixel delta of any size and
+	// returns the delta that was actually applied.
+	MoveRelative(dx, dy int) (appliedX, appliedY int, err error)
 	// Click clicks the given button where the pointer already is.
 	Click(button string, clicks int) error
-	// Scroll sends wheel steps for the given mouse mode.
-	Scroll(steps int8, mouseMode string) error
-	// KeyCode resolves a key name to its HID code.
+	// Scroll sends wheel steps: wheelY for vertical, wheelX for horizontal.
+	// mouseMode is advisory; the device picks the channel from its gadget.
+	Scroll(steps int8, wheelX int8, mouseMode string) error
+	// KeyCode resolves a key name to its HID code, case-insensitively.
 	KeyCode(name string) (uint8, bool)
+	// ModifierBit resolves a modifier name (ctrl, shift, alt, win) to its report
+	// bit, so a single modifier can be pressed or held on its own.
+	ModifierBit(name string) (uint8, bool)
 	// KeyboardReport sends a report without releasing it, so a key can be held.
 	KeyboardReport(modifier uint8, keys []uint8) error
 	// TapKeys presses the keys and releases everything again.
@@ -101,6 +136,13 @@ type Input interface {
 	AbsPosition() (x, y int)
 	// MaxTextLength is the longest string one TypeText call accepts.
 	MaxTextLength() int
+	// KeysDownState returns the modifier byte and key codes the device is
+	// currently reporting to the host. This is the only way to observe what the
+	// HID layer actually holds, instead of guessing from what was sent.
+	KeysDownState() (modifier uint8, keys []uint8)
+	// KeyboardLedState returns the LED byte the host last sent to the emulated
+	// keyboard, which is what the remote lock lights currently show.
+	KeyboardLedState() KeyboardLeds
 }
 
 // Screen is the capture surface of the device.
@@ -299,14 +341,24 @@ func reconcileListener() {
 	}
 }
 
-// newHTTPHandler assembles the SSE endpoints with the guards layered around
+// newHTTPHandler assembles the MCP endpoints with the guards layered around
 // them. The order matters: the body limit is outermost so an oversized request
 // is rejected before anything buffers it, CORS sits outside auth because a
 // browser preflight carries no credentials, and auth is innermost so a rejected
 // request never reaches the tool handlers.
 func newHTTPHandler(s *server.MCPServer) http.Handler {
+	// /mcp speaks streamable HTTP, which is what current clients (including pi)
+	// use: the legacy SSE transport is no longer accepted by them. Stateless is
+	// deliberate on a device with a small heap - no session table to leak, and
+	// every request already carries the API key.
+	streamable := server.NewStreamableHTTPServer(s, server.WithStateLess(true))
+
+	// the SSE pair stays for clients that were written against the 2024-11
+	// transport, so an existing setup keeps working after an update
 	sseServer := server.NewSSEServer(s)
+
 	mux := http.NewServeMux()
+	mux.Handle("/mcp", streamable)
 	mux.Handle("/sse", sseServer.SSEHandler())
 	mux.Handle("/message", sseServer.MessageHandler())
 

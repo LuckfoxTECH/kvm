@@ -13,7 +13,7 @@ var absoluteMouseConfig = gadgetConfigItem{
 	attrs: gadgetAttributes{
 		"protocol":      "2",
 		"subclass":      "0",
-		"report_length": "6",
+		"report_length": "8",
 	},
 	reportDesc: absoluteMouseCombinedReportDesc,
 }
@@ -48,25 +48,27 @@ var absoluteMouseCombinedReportDesc = []byte{
 	0x75, 0x10, //         Report Size (16)
 	0x95, 0x02, //         Report Count (2)
 	0x81, 0x02, //         Input (Data, Var, Abs)
-	0xC0, //     End Collection
 
-	// Report ID 2: Relative Wheel Movement
-	0x85, 0x02, //     Report ID (2)
-	0x09, 0x38, //     Usage (Wheel)
-	0x15, 0x81, //     Logical Minimum (-127)
-	0x25, 0x7F, //     Logical Maximum (127)
-	0x35, 0x00, //     Physical Minimum (0) = Reset Physical Minimum
-	0x45, 0x00, //     Physical Maximum (0) = Reset Physical Maximum
-	0x75, 0x08, //     Report Size (8)
-	0x95, 0x01, //     Report Count (1)
-	0x81, 0x06, //     Input (Data, Var, Rel)
-	0x05, 0x0C, //     Usage Page (Consumer)
-	0x0A, 0x38, 0x02, //     Usage (AC Pan)
-	0x15, 0x81, //     Logical Minimum (-127)
-	0x25, 0x7F, //     Logical Maximum (127)
-	0x75, 0x08, //     Report Size (8)
-	0x95, 0x01, //     Report Count (1)
-	0x81, 0x06, //     Input (Data, Var, Rel)
+	// Wheel and AC Pan share the movement report. Hosts (macOS in particular) only
+	// follow the wheel of a mouse application collection when it arrives in that
+	// collection's primary report; a separate report ID carrying the wheel alone
+	// is accepted by the hardware but never turned into a scroll event.
+	0x09, 0x38, //         Usage (Wheel)
+	0x15, 0x81, //         Logical Minimum (-127)
+	0x25, 0x7F, //         Logical Maximum (127)
+	0x35, 0x00, //         Physical Minimum (0) = Reset Physical Minimum
+	0x45, 0x00, //         Physical Maximum (0) = Reset Physical Maximum
+	0x75, 0x08, //         Report Size (8)
+	0x95, 0x01, //         Report Count (1)
+	0x81, 0x06, //         Input (Data, Var, Rel)
+	0x05, 0x0C, //         Usage Page (Consumer)
+	0x0A, 0x38, 0x02, //         Usage (AC Pan)
+	0x15, 0x81, //         Logical Minimum (-127)
+	0x25, 0x7F, //         Logical Maximum (127)
+	0x75, 0x08, //         Report Size (8)
+	0x95, 0x01, //         Report Count (1)
+	0x81, 0x06, //         Input (Data, Var, Rel)
+	0xC0, //     End Collection
 
 	0xC0, // End Collection
 }
@@ -128,6 +130,8 @@ func (u *UsbGadget) AbsMouseReport(x, y int, buttons uint8) error {
 		uint8(x >> 8), // X High Byte
 		uint8(y),      // Y Low Byte
 		uint8(y >> 8), // Y High Byte
+		0,             // Wheel
+		0,             // AC Pan
 	})
 	if err != nil {
 		return err
@@ -135,6 +139,7 @@ func (u *UsbGadget) AbsMouseReport(x, y int, buttons uint8) error {
 
 	u.absMouseX = x
 	u.absMouseY = y
+	u.absMouseButtons = buttons
 
 	u.resetUserInputTime()
 	return nil
@@ -166,10 +171,18 @@ func (u *UsbGadget) AbsMouseWheelReport(wheelY, wheelX int8) error {
 		return nil
 	}
 
+	// The wheel shares the movement report, so the last position and button state
+	// have to be repeated: a shorter report is rejected by the gadget.
+	x, y := u.absMouseX, u.absMouseY
 	err := u.absMouseWriteHidFile([]byte{
-		2,            // Report ID 2
-		byte(wheelY), // Wheel Y (signed)
-		byte(wheelX), // AC Pan (signed)
+		1,                 // Report ID 1
+		u.absMouseButtons, // Buttons
+		uint8(x),          // X Low Byte
+		uint8(x >> 8),     // X High Byte
+		uint8(y),          // Y Low Byte
+		uint8(y >> 8),     // Y High Byte
+		byte(wheelY),      // Wheel (signed)
+		byte(wheelX),      // AC Pan (signed)
 	})
 
 	u.resetUserInputTime()

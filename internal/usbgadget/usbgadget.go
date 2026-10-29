@@ -65,8 +65,9 @@ type UsbGadget struct {
 	keyboardLock    sync.Mutex
 	absMouseHidFile *os.File
 	absMouseLock    sync.Mutex
-	absMouseX       int // last absolute X reported to the host, HID logical units (0-32767)
-	absMouseY       int // last absolute Y reported to the host, HID logical units (0-32767)
+	absMouseX       int   // last absolute X reported to the host, HID logical units (0-32767)
+	absMouseY       int   // last absolute Y reported to the host, HID logical units (0-32767)
+	absMouseButtons uint8 // last button bitmask reported through the absolute mouse
 	relMouseHidFile *os.File
 	relMouseLock    sync.Mutex
 

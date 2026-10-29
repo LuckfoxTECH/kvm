@@ -2047,9 +2047,9 @@ func StopJpegCapture() error {
 }
 
 const (
-	snapshotReadyTimeout = 5 * time.Second
+	snapshotReadyTimeout = 3 * time.Second
 	snapshotAttempts     = 2
-	snapshotPollAttempts = 20
+	snapshotPollAttempts = 8
 	snapshotPollInterval = 250 * time.Millisecond
 	snapshotStreamLinger = 15 * time.Second
 )
@@ -2150,9 +2150,14 @@ func readSnapshotFile() ([]byte, error) {
 func takeSnapshot() ([]byte, error) {
 	os.Remove(snapshotSpoolPath)
 
-	// drain any stale signal before triggering
+	// drain stale signals before triggering: a report from the previous attempt
+	// describes the previous request, not this one.
 	select {
 	case <-jpegReadyCh:
+	default:
+	}
+	select {
+	case <-jpegFailedCh:
 	default:
 	}
 
@@ -2170,6 +2175,9 @@ func takeSnapshot() ([]byte, error) {
 		} else {
 			logger.Warn().Err(err).Msg("jpeg_ready received but snapshot file not readable")
 		}
+	case reason := <-jpegFailedCh:
+		logger.Warn().Str("reason", reason).Msg("native reported the snapshot cannot complete")
+		return nil, fmt.Errorf("native snapshot failed: %s", reason)
 	case <-time.After(snapshotReadyTimeout):
 		logger.Warn().Msg("jpeg_ready event not received, falling back to polling")
 	}
@@ -2182,7 +2190,10 @@ func takeSnapshot() ([]byte, error) {
 		time.Sleep(snapshotPollInterval)
 	}
 
-	return nil, fmt.Errorf("JPEG file not found at %s", snapshotSpoolPath)
+	// Name both halves of the failure: the missing ready event is what
+	// distinguishes a mute native encoder from an unreadable spool file.
+	return nil, fmt.Errorf("native encoder produced no JPEG within %s: no jpeg_ready event and %s is missing",
+		snapshotReadyTimeout+time.Duration(snapshotPollAttempts)*snapshotPollInterval, snapshotSpoolPath)
 }
 
 // captureScreenshot captures a JPEG screenshot using hardware encoder.
@@ -2201,8 +2212,13 @@ func captureScreenshot(format string) ([]byte, error) {
 		logger.Warn().Err(err).Msg("failed to create screenshot directory")
 	}
 
-	if err := ensureSnapshotStream(); err != nil {
-		logger.Warn().Err(err).Msg("snapshot stream not ready, trying snapshot anyway")
+	// The native encoder only runs while a video consumer is attached, so a
+	// failure here is the usual reason there is nothing to capture. Keep going
+	// anyway (polling may still find a file), but carry the cause into the final
+	// error instead of reporting the symptom as the diagnosis.
+	streamErr := ensureSnapshotStream()
+	if streamErr != nil {
+		logger.Warn().Err(streamErr).Msg("snapshot stream not ready, trying snapshot anyway")
 	}
 	defer releaseSnapshotStream()
 
@@ -2219,6 +2235,9 @@ func captureScreenshot(format string) ([]byte, error) {
 		}
 	}
 
+	if streamErr != nil {
+		return nil, fmt.Errorf("%w (video stream not ready: %v)", lastErr, streamErr)
+	}
 	return nil, lastErr
 }
 
