@@ -16,6 +16,16 @@ import (
 
 var ctrlSocketConn net.Conn
 
+// The EDID write makes the host re-read the descriptor, which can trigger a
+// re-enumeration. It has to run once per boot, not once per ctrl-socket
+// reconnect, so it is gated on an explicit success flag rather than sync.Once:
+// a connection that dies while the retries are still running should leave the
+// job pending for the next connection instead of marking it done.
+var (
+	edidRestoreMu sync.Mutex
+	edidRestored  bool
+)
+
 type CtrlAction struct {
 	Action string                 `json:"action"`
 	Seq    int32                  `json:"seq,omitempty"`
@@ -194,8 +204,8 @@ func handleCtrlClient(conn net.Conn) {
 
 	ctrlSocketConn = conn
 
-	// Restore HDMI EDID if applicable
-	go restoreHdmiEdid()
+	// Restore HDMI EDID if applicable. Guarded so a reconnect does not re-apply it.
+	go restoreHdmiEdidOnce()
 
 	readBuf := make([]byte, 4096)
 	for {
@@ -361,7 +371,7 @@ func ExtractAndRunVideoBin() error {
 // controller may ship its own EDID, and it is overwritten here so the configured
 // value always wins. On first boot there is no configured value yet, so the
 // built-in default is written to the config and used from then on.
-func restoreHdmiEdid() {
+func restoreHdmiEdid() bool {
 	edid := config.EdidString
 	if edid == "" {
 		edid = defaultEdidHex
@@ -378,7 +388,7 @@ func restoreHdmiEdid() {
 		_, err := CallCtrlAction("set_edid", map[string]interface{}{"edid": edid})
 		if err == nil {
 			videoLogger.Info().Int("attempt", attempt).Msg("Applied HDMI EDID from config")
-			return
+			return true
 		}
 		videoLogger.Warn().Err(err).Int("attempt", attempt).Msg("Failed to apply HDMI EDID")
 		if attempt < 3 {
@@ -386,4 +396,18 @@ func restoreHdmiEdid() {
 		}
 	}
 	videoLogger.Error().Msg("Giving up on applying HDMI EDID from config")
+	return false
+}
+
+// restoreHdmiEdidOnce applies the configured EDID at most once per boot.
+func restoreHdmiEdidOnce() {
+	edidRestoreMu.Lock()
+	defer edidRestoreMu.Unlock()
+
+	if edidRestored {
+		return
+	}
+	if restoreHdmiEdid() {
+		edidRestored = true
+	}
 }

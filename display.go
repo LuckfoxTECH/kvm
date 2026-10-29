@@ -121,12 +121,13 @@ var (
 func updateDisplay() {
 	updateLabelIfChanged("Version_Hostname_Label", GetHostname())
 
-	if usbState == "configured" {
+	usbStateValue := getUSBStateCached()
+	if usbStateValue == "configured" {
 		_, _ = lvObjSetState("Main", "USB_CONNECTED")
 	} else {
 		_, _ = lvObjSetState("Main", "USB_DISCONNECTED")
 	}
-	_ = os.WriteFile("/userdata/usb_state", []byte(usbState), 0644)
+	_ = os.WriteFile("/userdata/usb_state", []byte(usbStateValue), 0644)
 
 	if lastVideoState.Ready {
 		_, _ = lvObjSetState("Main", "HDMI_CONNECTED")

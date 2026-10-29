@@ -327,23 +327,28 @@ func HandleVpnDisplayUpdateMessage(event CtrlResponse) {
 		return
 	}
 
-	switch vpnUpdateDisplayState.TailScaleState {
-	case "connected":
-		updateLabelIfChanged("Network_TailScale_Label", "Connected")
-	case "logined":
-		updateLabelIfChanged("Network_TailScale_Label", "Logined")
-	default:
-		updateLabelIfChanged("Network_TailScale_Label", "Disconnected")
-	}
-
-	switch vpnUpdateDisplayState.ZeroTierState {
-	case "connected":
-		updateLabelIfChanged("Network_ZeroTier_Label", "Connected")
-	case "logined":
-		updateLabelIfChanged("Network_ZeroTier_Label", "Logined")
-	default:
-		updateLabelIfChanged("Network_ZeroTier_Label", "Disconnected")
-	}
+	// The display firmware in use no longer defines these two labels, so every
+	// update is answered with "object not found" and the ctrl channel is flooded
+	// with identical lv_label_set_text commands. Left commented out rather than
+	// deleted so the wiring is obvious if the labels are ever added back to the UI.
+	//
+	// switch vpnUpdateDisplayState.TailScaleState {
+	// case "connected":
+	// 	updateLabelIfChanged("Network_TailScale_Label", "Connected")
+	// case "logined":
+	// 	updateLabelIfChanged("Network_TailScale_Label", "Logined")
+	// default:
+	// 	updateLabelIfChanged("Network_TailScale_Label", "Disconnected")
+	// }
+	//
+	// switch vpnUpdateDisplayState.ZeroTierState {
+	// case "connected":
+	// 	updateLabelIfChanged("Network_ZeroTier_Label", "Connected")
+	// case "logined":
+	// 	updateLabelIfChanged("Network_ZeroTier_Label", "Logined")
+	// default:
+	// 	updateLabelIfChanged("Network_ZeroTier_Label", "Disconnected")
+	// }
 }
 
 type FrpcStatus struct {
