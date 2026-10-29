@@ -31,8 +31,12 @@ import { keyboards } from "@/keyboardLayouts";
 import BottomPopoverButton from "@components/PopoverButton";
 import MousePanel from "@components/MousePanel";
 import KeyboardPanel from "@/layout/components_bottom/keyboard/KeyboardPanel";
-import UsbEpModeSelect from "@/layout/components_bottom/usbepmode/UsbEpModeSelect";
-import UsbStatusPanel from "@/layout/components_bottom/usb_status/UsbStatusPanel";
+import useUsbEpModeData from "@/layout/components_bottom/usbepmode/useUsbEpModeData";
+import BarIconButton from "@/layout/core/bar_bottom/BarIconButton";
+import RemoteStatusPanel, { remoteIconColor } from "@/layout/core/bar_bottom/RemoteStatusPanel";
+import UsbDrawerPanel from "@/layout/core/bar_bottom/UsbDrawerPanel";
+import NetworkSVG from "@assets/second/network.svg?react";
+import HdmiStatusPanel from "@/layout/core/bar_bottom/HdmiStatusPanel";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import { dark_bg2_style, selected_bt_bg } from "@/layout/theme_color";
 import { useThemeSettings } from "@routes/login_page/useLocalAuth";
@@ -51,14 +55,25 @@ export default function BottomBarPC() {
   const showPressedKeys = useSettingsStore(state => state.showPressedKeys);
   const forceHttp = useSettingsStore(state => state.forceHttp);
   const sidebarView = useUiStore(state => state.sidebarView);
-  const peerConnectionState = useRTCStore(state => state.peerConnectionState);
   const tailScaleConnectionState = useVpnStore(state => state.tailScaleConnectionState);
   const zeroTierConnectionState = useVpnStore(state => state.zeroTierConnectionState);
+  const tunnelEntries = useVpnStore(state => state.tunnelEntries);
   const usbState = useHidStore(state => state.usbState);
+  // Emulation off means the gadget is deliberately stopped: the bar shows it in
+  // the warning colour rather than as a healthy green link.
+  const usbEmulationEnabled = useHidStore(state => state.usbEmulationEnabled);
+  const usbActive = usbEmulationEnabled && usbState === "configured";
   const hdmiState = useVideoStore(state => state.hdmiState);
+  const inputWidth = useVideoStore(state => state.inputWidth);
+  const inputHeight = useVideoStore(state => state.inputHeight);
+  const inputFps = useVideoStore(state => state.inputFps);
+  const usbEpData = useUsbEpModeData();
 
 
   const keyboardLedState = useHidStore(state => state.keyboardLedState);
+  // Host mode stays unknown until the host actually reports (see
+  // KeyboardLedStatusRow for the reasoning).
+  const ledsKnown = keyboardLedState?.reported === true;
   const keyboardLayout = useSettingsStore(state => state.keyboardLayout);
   const isTurnServerInUse = useRTCStore(state => state.isTurnServerInUse);
 
@@ -89,12 +104,6 @@ export default function BottomBarPC() {
     })();
   }, 500);
 
-  const videoButtonLabel = useMemo(() => {
-    if (forceHttp) {
-      return "N/A fps";
-    }
-    return `${Math.round(fps)}fps`;
-  }, [forceHttp, fps]);
   useEffect(() => {
     send("getNetworkSettings", {}, resp => {
       if ("error" in resp) return;
@@ -110,30 +119,61 @@ export default function BottomBarPC() {
           <div className="flex flex-wrap items-center pl-2 gap-x-4">
             <Text style={{ fontSize: 12 }}>{hostname}:</Text>
 
-            <ConnectionStatusButton
-              icon={hdmiState === "ready" ? <Hdml2SVG fontSize={16} /> : <HdmlSVG fontSize={16} />}
-              text={$at("HDMI")}
-              isActive={hdmiState === "ready"}
+            <BottomPopoverButton
+              buttonIconNode={hdmiState === "ready" ? <Hdml2SVG fontSize={16} /> : <HdmlSVG fontSize={16} />}
+              buttonText={$at("HDMI")}
+              style={{ color: hdmiState === "ready" ? "rgba(0, 205, 27, 1)" : "inherit" }}
+              align="left"
+              panelContent={(
+                <HdmiStatusPanel
+                  hdmiState={hdmiState}
+                  inputWidth={inputWidth}
+                  inputHeight={inputHeight}
+                  inputFps={inputFps}
+                  liveFps={fps}
+                />
+              )}
             />
 
             <BottomPopoverButton
-              buttonIconNode={usbState === "configured" ? <Usb2SVG fontSize={16} /> : <UsbSVG fontSize={16} />}
+              buttonIconNode={usbActive ? <Usb2SVG fontSize={16} /> : <UsbSVG fontSize={16} />}
               buttonText={$at("USB")}
-              style={{ color: usbState === "configured" ? "rgba(0, 205, 27, 1)" : "inherit" }}
-              panelContent={<UsbStatusPanel />}
+              style={{
+                color: !usbEmulationEnabled
+                  ? "rgba(250, 173, 20, 1)"
+                  : usbActive
+                    ? "rgba(0, 205, 27, 1)"
+                    : "inherit",
+              }}
               align="left"
+              panelContent={(
+                <UsbDrawerPanel
+                  usbState={usbState}
+                  usbEpMode={usbEpData.usbEpMode}
+                  usbDeviceConfig={usbEpData.usbDeviceConfig}
+                  audioMode={usbEpData.audioMode}
+                  onUsbEpModeChange={usbEpData.onUsbEpModeChange}
+                  onUsbConfigChange={usbEpData.onUsbConfigChange}
+                  onAudioModeChange={usbEpData.onAudioModeChange}
+                />
+              )}
             />
 
-            <VpnStatusButton
-              text={$at("TailScale")}
-              peerState={peerConnectionState}
-              vpnState={tailScaleConnectionState}
-            />
-
-            <VpnStatusButton
-              text={$at("Zerotier")}
-              peerState={peerConnectionState}
-              vpnState={zeroTierConnectionState}
+            <BottomPopoverButton
+              buttonIconNode={(
+                <NetworkSVG
+                  fontSize={16}
+                  style={{ color: remoteIconColor(tailScaleConnectionState, zeroTierConnectionState, tunnelEntries) }}
+                />
+              )}
+              buttonText={$at("Remote")}
+              align="left"
+              panelContent={(
+                <RemoteStatusPanel
+                  tailScaleState={tailScaleConnectionState}
+                  zeroTierState={zeroTierConnectionState}
+                />
+              )}
             />
 
             {showPressedKeys && (
@@ -156,22 +196,25 @@ export default function BottomBarPC() {
           <div style={{ width: "1px", height: "100%" }}
                className={"bg-[rgba(229,229,229,1)] dark:bg-[rgba(56,56,56,1)]"} />
           <BottomPopoverButton
+            buttonText={$at("Keyboard")}
+            iconOnly
             buttonIconNode={
+              // icon and LED cluster live in one node so hovering anywhere on
+              // the group reveals the "Keyboard" label
               <div className="flex items-center">
                 <span className="pl-1 pr-1">
                   {isDark ? <Keyboard2SVG fontSize={16} /> : <KeyboardSVG fontSize={16} />}
                 </span>
                 <LedStatusButton
-                  ledState={keyboardLedState?.num_lock}
+                  ledState={ledsKnown ? keyboardLedState?.num_lock : undefined}
                   text={$at("Num")}
                 />
                 <LedStatusButton
-                  ledState={keyboardLedState?.caps_lock}
-
+                  ledState={ledsKnown ? keyboardLedState?.caps_lock : undefined}
                   text={$at("Caps")}
                 />
                 <LedStatusButton
-                  ledState={keyboardLedState?.scroll_lock}
+                  ledState={ledsKnown ? keyboardLedState?.scroll_lock : undefined}
                   text={$at("Scroll")}
                 />
                 <span className="pl-1 text-xs opacity-70" style={{ fontSize: 12 }}>{layoutAbbrev}</span>
@@ -187,14 +230,9 @@ export default function BottomBarPC() {
               buttonText={$at("Mouse")}
               buttonIconNode={<MouseSVG fontSize={16} />}
               align="left"
+              iconOnly
               panelContent={<MousePanel />}
             />
-          <div style={{ width: "1px", height: "100%" }}
-               className={"bg-[rgba(229,229,229,1)] dark:bg-[rgba(56,56,56,1)]"} />
-
-            <UsbEpModeSelect />
-
-
           <div style={{ width: "1px", height: "100%" }}
                className={"bg-[rgba(229,229,229,1)] dark:bg-[rgba(56,56,56,1)]"} />
                  
@@ -216,8 +254,14 @@ export default function BottomBarPC() {
                 toggleSidebarView("SharedFolders");
               }}
               style={{height:"24px",borderRadius:0, fontSize: "12px", color: "inherit"}}
-              className={sidebarView === "SharedFolders" ? selected_bt_bg : ""}
-            >{$at("Shared Folders")}
+              className={`group ${sidebarView === "SharedFolders" ? selected_bt_bg : ""}`}
+            >
+              <span
+                className="inline-block overflow-hidden whitespace-nowrap max-w-0 opacity-0 transition-all duration-200 ease-out group-hover:opacity-100 group-hover:max-w-[160px]"
+                style={sidebarView === "SharedFolders" ? { maxWidth: 160, opacity: 1 } : undefined}
+              >
+                {$at("Shared Folders")}
+              </span>
             </AntdButton>
 
           )}
@@ -225,51 +269,39 @@ export default function BottomBarPC() {
           <div style={{ width: "1px", height: "100%" }}
                className={"bg-[rgba(229,229,229,1)] dark:bg-[rgba(56,56,56,1)]"} />
 
-          <AntdButton
-            type={"text"}
-            size={"small"}
+          <BarIconButton
             icon={<MediaSVG fontSize={16} />}
+            label={$at("Virtual Media")}
+            active={sidebarView === "VirtualMedia"}
             onClick={() => {
               setDisableFocusTrap(true);
               toggleSidebarView("VirtualMedia");
             }}
-            style={{height:"24px",borderRadius:0, fontSize: "12px", color: "inherit"}}
-            className={sidebarView === "VirtualMedia" ? selected_bt_bg : ""}
-          >
-            {$at("Virtual Media")}
-          </AntdButton>
+          />
           <div style={{ width: "1px", height: "100%" }}
                className={"bg-[rgba(229,229,229,1)] dark:bg-[rgba(56,56,56,1)]"} />
-          <AntdButton
+          <BarIconButton
             icon={<VideoSVG fontSize={16} />}
-            type={"text"}
-            size={"small"}
+            label={$at("Video")}
+            active={sidebarView === "SettingsVideo"}
             onClick={() => {
               setDisableFocusTrap(true);
               toggleSidebarView("SettingsVideo");
             }}
-            style={{height:"24px",borderRadius:0, fontSize: "12px", color: "inherit"}}
-            className={sidebarView === "SettingsVideo" ? selected_bt_bg : ""}
-          >
-            {videoButtonLabel}
-          </AntdButton>
+          />
           <div style={{ width: "1px", height: "100%" }}
                className={"bg-[rgba(229,229,229,1)] dark:bg-[rgba(56,56,56,1)]"} />
           {!forceHttp && (
           <div className="hidden md:block">
 
-            <AntdButton
-              type={"text"}
-              size={"small"}
+            <BarIconButton
               icon={<StateSvg fontSize={16} />}
+              label={$at("Stats")}
+              active={sidebarView === "connection-stats"}
               onClick={() => {
                 toggleSidebarView("connection-stats");
               }}
-              style={{height:"24px",borderRadius:0, fontSize: "12px", color: "inherit"}}
-              className={sidebarView === "connection-stats" ? selected_bt_bg : ""}
-            >
-              {$at("Stats")}
-            </AntdButton>
+            />
           </div>
           )}
 
@@ -285,85 +317,33 @@ export default function BottomBarPC() {
   );
 }
 
-interface ConnectionStatusButtonProps {
-  icon: React.ReactNode;
-  text: string;
-  isActive: boolean;
-}
-
-function ConnectionStatusButton({ icon, text, isActive }: ConnectionStatusButtonProps) {
-  return (
-    <AntdButton
-      icon={icon}
-      type="text"
-      size="small"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: isActive ? "rgba(0, 205, 27, 1)" : "inherit",
-        fontSize: 12,
-      }}
-    >
-      {text}
-    </AntdButton>
-  );
-}
-
-interface VpnStatusButtonProps {
-  text: string;
-  peerState: any;
-  vpnState: any;
-}
-
-function VpnStatusButton({ text, peerState, vpnState }: VpnStatusButtonProps) {
-  const getVpnColor = () => {
-    if (peerState === "connected" && vpnState === "connected") {
-      return "rgb(22, 152, 217,1)";
-    }
-    return vpnState === "logined" ? "rgba(0, 205, 27, 1)" : "rgba(205, 205, 205, 1)";
-  };
-
-  return (
-    <AntdButton
-      icon={
-        <div style={{
-          width: "7px",
-          height: "7px",
-          borderRadius: "50%",
-          backgroundColor: getVpnColor(),
-        }}></div>
-      }
-      type="text"
-      size="small"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: 12,
-        color: "inherit",
-      }}
-    >
-      {text}
-    </AntdButton>
-  );
-}
-
 interface LedStatusButtonProps {
   ledState: boolean | undefined;
   text: string;
 }
 
 function LedStatusButton({ ledState, text }: LedStatusButtonProps) {
+  const unknown = ledState === undefined;
   return (
     <div className="flex items-center justify-center px-2" style={{ color: "inherit" }}>
       <div style={{
-        width: "7px",
-        height: "7px",
+        width: "9px",
+        height: "9px",
         borderRadius: "50%",
-        backgroundColor: ledState ? "rgba(0, 205, 27, 1)" : "rgba(205, 205, 205, 1)",
+        backgroundColor: unknown
+          ? "rgba(170, 170, 170, 0.55)"
+          : ledState
+            ? "rgba(0, 205, 27, 1)"
+            : "rgba(205, 205, 205, 1)",
         marginRight: "6px",
-      }}></div>
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        // Grey question mark for "unknown"; no text label on any mode.
+        color: unknown ? "rgba(70, 70, 70, 0.95)" : "rgba(255, 255, 255, 0.95)",
+        fontSize: "8px",
+        lineHeight: 1,
+      }}>{unknown ? "?" : null}</div>
       <span style={{ fontSize: 12, position: "relative", top: "1px" }}>{text}</span>
     </div>
   );
@@ -375,14 +355,23 @@ interface PressedKeysDisplayProps {
   $at: any;
 }
 
+// Object.entries(...).find() instead of filter()[0]: a usage that is not in the
+// table makes the lookup return undefined, and the previous filter(...)[0][0]
+// threw "Cannot read properties of undefined (reading '0')" on any raw usage
+// the caller sent that has no name. Fall back to the hex value so an unnamed
+// usage is at least visible in the bar.
+const usageLabel = (usage: number, table: Record<string, number>) =>
+  Object.entries(table).find(([, value]) => value === usage)?.[0] ??
+  `0x${usage.toString(16).padStart(2, "0")}`;
+
 function PressedKeysDisplay({ activeKeys, activeModifiers, $at }: PressedKeysDisplayProps) {
   return (
     <div className="flex items-center gap-x-1" style={{ position: "relative", top: "1px", fontSize: 12}}>
       <span className="font-semibold">{$at("Keys")}:</span>
       <h2>
         {[
-          ...activeKeys.map(x => Object.entries(keys).filter(y => y[1] === x)[0][0]),
-          activeModifiers.map(x => Object.entries(modifiers).filter(y => y[1] === x)[0][0]),
+          ...activeKeys.map(usage => usageLabel(usage, keys)),
+          ...activeModifiers.map(usage => usageLabel(usage, modifiers)),
         ].join(", ")}
       </h2>
     </div>

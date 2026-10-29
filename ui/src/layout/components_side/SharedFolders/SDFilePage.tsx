@@ -5,7 +5,7 @@ import { FileManager } from "@/layout/components_side/SharedFolders/FileManager"
 import notifications from "@/notifications";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 
-export default function SDFilePage() {
+export default function SDFilePage({ hideTitle }: { hideTitle?: boolean }) {
   const { $at } = useReactAt();
   const [send] = useJsonRpc();
   const [loading, setLoading] = useState(false);
@@ -74,6 +74,7 @@ export default function SDFilePage() {
         onFormatSDStorage={handleFormatSDStorage}
         fsType={fsType}
         onFsTypeChange={setFsType}
+        hideTitle={hideTitle}
       />
     </>
   );

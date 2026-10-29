@@ -1,12 +1,14 @@
 import React from "react";
-import { Divider } from "antd";
+import { useReactAt } from "i18n-auto-extractor/react";
+import UsbSVG from "@assets/second/usb.svg?react";
+import Usb2SVG from "@assets/second/usb2.svg?react";
 
-import { useSettingsStore } from "@/hooks/stores";
+import { useHidStore, useSettingsStore } from "@/hooks/stores";
 import SharedFolders from "@/layout/components_side/SharedFolders";
-import { dark_bd_style, dark_bg_style_fun } from "@/layout/theme_color";
-import { useThemeSettings } from "@routes/login_page/useLocalAuth";
+import { StatusPanel, StatusPanelRow } from "@/layout/core/bar_bottom/StatusPanel";
 import VolumeControl from "@components/VolumeControl";
 
+import UsbFunctionsPanel from "./UsbFunctionsPanel";
 import { USB_MODE_OPTIONS, UsbDeviceConfig } from "./usbModeOptions";
 
 interface UsbEpModeSelectMobileProps {
@@ -19,16 +21,24 @@ interface UsbEpModeSelectMobileProps {
   onAudioModeChange: (mode: string) => void;
 }
 
+// UsbEpModeSelectMobile is the phone sized USB drawer. It mirrors the desktop
+// drawer: one card with the gadget state in the header, the shared USB body
+// (reinitialize, emulation switches, extended functions) and finally the
+// settings that belong to the selected extended mode.
 export const UsbEpModeSelectMobile: React.FC<UsbEpModeSelectMobileProps> = ({
-                                                                  usbEpMode,
-                                                                  loading,
-                                                                  usbDeviceConfig,
-                                                                  audioMode,
-                                                                  onUsbEpModeChange,
-                                                                  onUsbConfigChange,
-                                                                  onAudioModeChange,
-                                                                }) => {
+  usbEpMode,
+  loading,
+  usbDeviceConfig,
+  audioMode,
+  onUsbEpModeChange,
+  onUsbConfigChange,
+  onAudioModeChange,
+}) => {
+  const { $at } = useReactAt();
+  const usbState = useHidStore(state => state.usbState);
+  const emulationEnabled = useHidStore(state => state.usbEmulationEnabled);
   const forceHttp = useSettingsStore(state => state.forceHttp);
+
   const handleUsbEpModeChange = async (newMode: string) => {
     onUsbEpModeChange(newMode);
 
@@ -60,54 +70,62 @@ export const UsbEpModeSelectMobile: React.FC<UsbEpModeSelectMobileProps> = ({
     }
   };
 
-  const { isDark } = useThemeSettings();
+  const configured = usbState === "configured";
+  const modeOptions = USB_MODE_OPTIONS.filter(option => !forceHttp || option.value !== "uac");
 
   return (
-    <div className={`w-full h-full flex flex-col  ${dark_bg_style_fun(isDark)}`}>
-      <div className={`
-        flex flex-col w-full mx-auto
-        ${isDark ? 'text-white' : 'bg-white text-black'}
-      `}>
-        {USB_MODE_OPTIONS.filter(option => !forceHttp || option.value !== "uac").map(option => (
-          <div
-            key={option.value}
-            className={`
-              flex items-center justify-between py-4 w-full
-              border-b ${dark_bd_style} last:border-b-0
-              transition-all duration-200 ease-in-out
-              ${isDark ? 'text-white' : 'text-black'}
-              ${loading ? 'cursor-not-allowed opacity-60' : 'cursor-pointer opacity-100'}
-            `}
-            onClick={() => !loading && handleUsbEpModeChange(option.value)}
-          >
-            <span className="font-normal tracking-[0.5px]">
-              {option.label}
-            </span>
-            <span className={`
-              text-lg transition-opacity duration-200 ease-in-out
-              ${isDark ? 'text-white' : 'text-black'}
-              ${usbEpMode === option.value ? 'opacity-100' : 'opacity-0'}
-            `}>
-              ✓
-            </span>
-          </div>
-        ))}
-      </div>
+    <div className="w-full flex flex-col">
+      <StatusPanel
+        icon={
+          !emulationEnabled ? (
+            <UsbSVG style={{ color: "rgba(250, 173, 20, 1)" }} />
+          ) : configured ? (
+            <Usb2SVG />
+          ) : (
+            <UsbSVG />
+          )
+        }
+        title={$at("USB")}
+        badge={
+          !emulationEnabled
+            ? { text: $at("Not started"), tone: "warn" }
+            : {
+                text: configured ? $at("Connected") : $at("Not Attached"),
+                tone: configured ? "ok" : "idle",
+              }
+        }
+        minWidth={0}
+      >
+        <UsbFunctionsPanel
+          extended={
+            <>
+              {modeOptions.map(option => (
+                <StatusPanelRow
+                  key={option.value}
+                  label={option.label}
+                  value={usbEpMode === option.value ? "✓" : undefined}
+                  dim={loading}
+                  onClick={() => !loading && handleUsbEpModeChange(option.value)}
+                />
+              ))}
+            </>
+          }
+        />
+      </StatusPanel>
 
-      <Divider size={"small"}/>
-
+      {/* Settings of the selected mode live outside the card, so they keep the
+          same page-like layout as the other phone drawers (Virtual Media). */}
       {usbEpMode === "uac" && (
-        <div className="w-full px-2">
-          <VolumeControl
-            size="XL"
-            theme="light"
-            fullWidth={true}
-            className="w-full"
-          />
+        <div className="w-full pt-4">
+          <VolumeControl size="XL" theme="light" fullWidth={true} className="w-full" />
         </div>
       )}
 
-      {usbEpMode === "mtp" && <SharedFolders />}
+      {usbEpMode === "mtp" && (
+        <div className="w-full pt-4">
+          <SharedFolders />
+        </div>
+      )}
     </div>
   );
 };

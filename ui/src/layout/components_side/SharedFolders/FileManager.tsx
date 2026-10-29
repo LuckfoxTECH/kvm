@@ -54,6 +54,8 @@ export interface StorageFiles {
 }
 
 interface StorageFilePageProps {
+  /** Set when the manager is embedded in a drawer that already has a title. */
+  hideTitle?: boolean;
   mediaType: "local" | "sd";
   returnTo: string;
 
@@ -83,6 +85,7 @@ export const FileManager: React.FC<StorageFilePageProps> = ({
                                                               onFormatSDStorage,
                                                               fsType,
                                                               onFsTypeChange,
+                                                              hideTitle = false,
                                                             }) => {
   const { $at } = useReactAt();
 
@@ -292,12 +295,14 @@ export const FileManager: React.FC<StorageFilePageProps> = ({
 
   return (
     <div className="w-full space-y-6 px-0.5">
-      <Title level={5} style={{ marginBottom: "24px" }}>
-        { (mediaType === "sd") 
-          ? $at("Manage Shared Folders in KVM MicroSD Card")
-          : $at("Manage Shared Folders in KVM Storage")
-        }
-      </Title>
+      {!hideTitle && (
+        <Title level={5} style={{ marginBottom: "24px" }}>
+          { (mediaType === "sd")
+            ? $at("Manage Shared Folders in KVM MicroSD Card")
+            : $at("Manage Shared Folders in KVM Storage")
+          }
+        </Title>
+      )}
 
       <FileListSection
         files={onStorageFiles}

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Button as AntdButton, Typography } from "antd";
 import { useReactAt } from "i18n-auto-extractor/react";
 import KeyboardSVG from "@assets/second/keyboard.svg?react";
@@ -7,12 +7,11 @@ import MouseSVG from "@assets/second/mouse.svg?react";
 import VideoSVG from "@assets/second/vedio.svg?react";
 import Video2SVG from "@assets/second/vedio2.svg?react";
 import MediaSVG from "@assets/second/media.svg?react";
-import USCSvg from "@assets/second/UAC.svg?react";
-import StateSvg from "@assets/second/state.svg?react";
 import HdmlSVG from "@assets/second/hdml.svg?react";
 import Hdml2SVG from "@assets/second/hdml2.svg?react";
 import UsbSVG from "@assets/second/usb.svg?react";
 import Usb2SVG from "@assets/second/usb2.svg?react";
+import NetworkSVG from "@assets/second/network.svg?react";
 import { useInterval } from "usehooks-ts";
 
 import {
@@ -25,6 +24,7 @@ import {
   useVpnStore,
 } from "@/hooks/stores";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
+import { remoteIconColor } from "@/layout/core/bar_bottom/RemoteStatusPanel";
 import { keyboards } from "@/keyboardLayouts";
 import {
   button_primary_color,
@@ -40,21 +40,12 @@ const { Text } = Typography;
 const views = [
   "KeyboardPanel",
   "MousePanel",
-  "UsbEpModeSelect",
   "VirtualMedia",
   "SettingsVideo",
-  "connection-stats"
 ];
 export default function BottomBarMobile() {
   const { $at } = useReactAt();
-  const keyboardLedState = useHidStore(state => state.keyboardLedState);
-  const keyboardLayout = useSettingsStore(state => state.keyboardLayout);
   const { isDark } = useTheme();
-
-  const layoutAbbrev = useMemo(() => {
-    if (!keyboardLayout) return "en_US";
-    return keyboardLayout;
-  }, [keyboardLayout]);
   const setDisableFocusTrap = useUiStore(state => state.setDisableVideoFocusTrap);
   const toggleSidebarView = useUiStore(state => state.toggleSidebarView);
   const forceHttp = useSettingsStore(state => state.forceHttp);
@@ -62,7 +53,10 @@ export default function BottomBarMobile() {
   const peerConnectionState = useRTCStore(state => state.peerConnectionState);
   const tailScaleConnectionState = useVpnStore(state => state.tailScaleConnectionState);
   const zeroTierConnectionState = useVpnStore(state => state.zeroTierConnectionState);
+  const tunnelEntries = useVpnStore(state => state.tunnelEntries);
   const usbState = useHidStore(state => state.usbState);
+  const usbEmulationEnabled = useHidStore(state => state.usbEmulationEnabled);
+  const usbActive = usbEmulationEnabled && usbState === "configured";
 
   const [hostname, setHostname] = useState("");
   const [activeTab, setActiveTab] = useState<number>(-1);
@@ -112,25 +106,18 @@ export default function BottomBarMobile() {
   const tabs = [
     { icon: isDark ? Keyboard2SVG : KeyboardSVG, label: $at("keyboard") },
     { icon: MouseSVG, label: $at("mouse") },
-    { icon: USCSvg, label: $at("UAC") },
     { icon: MediaSVG, label: $at("media") },
     { icon: isDark ? Video2SVG : VideoSVG, label: $at("video") },
-    { icon: StateSvg, label: $at("status") },
   ];
-  const videoButtonLabel = forceHttp ? "N/A fps" : `${Math.round(fps)}fps`;
   if(isVirtualKeyboardEnabled){
     return <></>
   }
   return (
-    <div className={`h-30 w-[100vw] flex flex-col ${dark_bg_style_fun(isDark)}`}>
-      <div className={`h-3/7 w-full ${dark_bg_style_fun(isDark)} flex flex-row flex-wrap items-center 
+    <div className={`w-[100vw] flex flex-col ${dark_bg_style_fun(isDark)}`}>
+      <div className={`h-[38px] w-full ${dark_bg_style_fun(isDark)} flex flex-row items-center
                       justify-between bg-white border-t border-gray-200 ${dark_bd_style}`}>
-        {tabs.map((tab, index) => {
-          const isStatsTab = index === 5;
-          if (forceHttp && isStatsTab) {
-            return null;
-          }
-          return (
+        <div className="flex-1 h-full flex flex-row items-center">
+          {tabs.map((tab, index) => (
             <TabButton
               key={index}
               icon={tab.icon}
@@ -138,61 +125,37 @@ export default function BottomBarMobile() {
               activeTab={activeTab}
               activeColor={activeColor}
               inactiveColor={inactiveColor}
+              tabCount={tabs.length}
               onClick={handleTabClick}
             />
-          );
-        })}
-      </div>
-
-      <div className={`h-2/7 w-full flex flex-row flex-wrap items-center 
-                        justify-between bg-white ${dark_bg_style_fun(isDark)} 
-                        border-t border-b border-gray-200 ${dark_bd_style}`}>
-        <div className="w-[80%] flex flex-row flex-wrap items-center justify-start">
-          <LedStatusButton ledState={keyboardLedState?.num_lock} text={$at("Num")} />
-          <LedStatusButton ledState={keyboardLedState?.caps_lock} text={$at("Caps")} />
-          <LedStatusButton ledState={keyboardLedState?.scroll_lock} text={$at("Scroll")} />
-          <span className="pl-2 text-xs opacity-70">{layoutAbbrev}</span>
-        </div>
-        <div className="w-[20%] flex flex-row flex-wrap items-center justify-end">
-          <AntdButton
-            type="text"
-            size="small"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 12,
-            }}
-          >
-            {videoButtonLabel}
-          </AntdButton>
+          ))}
         </div>
       </div>
 
-      <div className={`h-2/7 w-full flex flex-row flex-wrap items-center justify-evenly bg-white ${dark_bg_style_fun(isDark)}`}>
+      <div className={`h-[38px] w-full flex flex-row flex-wrap items-center justify-start gap-1 px-2 bg-white border-t border-gray-200 ${dark_bg_style_fun(isDark)} border-b ${dark_bd_style}`}>
         <Text style={{ fontSize: 12 }}>{hostname}:</Text>
-        <ConnectionStatusButton
-          icon={peerConnectionState ? <Hdml2SVG /> : <HdmlSVG />}
-          text={$at("HDMI")}
-          isActive={!!peerConnectionState}
-        />
-        <div onClick={() => toggleSidebarView("UsbStatusPanel")}>
+        <div onClick={() => { setDisableFocusTrap(true); toggleSidebarView("HdmiStatus"); }}>
           <ConnectionStatusButton
-            icon={usbState === "configured" ? <Usb2SVG /> : <UsbSVG />}
-            text={$at("USB")}
-            isActive={usbState === "configured"}
+            icon={peerConnectionState ? <Hdml2SVG /> : <HdmlSVG />}
+            text={$at("HDMI")}
+            isActive={!!peerConnectionState}
           />
         </div>
-        <VpnStatusButton
-          text={$at("TailScale")}
-          peerState={peerConnectionState}
-          vpnState={tailScaleConnectionState}
-        />
-        <VpnStatusButton
-          text={$at("Zerotier")}
-          peerState={peerConnectionState}
-          vpnState={zeroTierConnectionState}
-        />
+        <div onClick={() => toggleSidebarView("UsbEpModeSelect")}>
+          <ConnectionStatusButton
+            icon={usbActive ? <Usb2SVG /> : <UsbSVG />}
+            text={$at("USB")}
+            isActive={usbActive}
+            color={!usbEmulationEnabled ? "rgba(250, 173, 20, 1)" : undefined}
+          />
+        </div>
+        <div onClick={() => { setDisableFocusTrap(true); toggleSidebarView("RemoteStatus"); }}>
+          <ConnectionStatusButton
+            icon={<NetworkSVG style={{ color: remoteIconColor(tailScaleConnectionState, zeroTierConnectionState, tunnelEntries) }} />}
+            text={$at("Remote")}
+            isActive={false}
+          />
+        </div>
       </div>
     </div>
   );
@@ -206,16 +169,18 @@ interface TabButtonProps {
   inactiveColor: string;
   onClick: (index: number) => void;
   disabled?: boolean;
+  tabCount: number;
 }
 
-function TabButton({ icon: Icon, index, onClick, disabled }: TabButtonProps) {
+function TabButton({ icon: Icon, index, onClick, disabled, tabCount }: TabButtonProps) {
   const sidebarView = useUiStore(state => state.sidebarView);
   const isActive = !disabled && sidebarView === views[index];
 
   return (
     <div
+      style={{ width: `${100 / tabCount}%` }}
       className={`
-        h-full w-1/6 flex justify-center items-center ${disabled ? "cursor-default" : "cursor-pointer"} relative
+        h-full flex justify-center items-center ${disabled ? "cursor-default" : "cursor-pointer"} relative
         transition-all duration-200 ease-in-out
         ${isActive ? "text-[rgba(22,152,217,1)]" : `text-gray-600 ${dark_font_style}`}
       `}
@@ -246,9 +211,11 @@ interface ConnectionStatusButtonProps {
   icon: React.ReactNode;
   text: string;
   isActive: boolean;
+  /** Overrides the derived active/inactive colour, used for the stopped state. */
+  color?: string;
 }
 
-function ConnectionStatusButton({ icon, text, isActive }: ConnectionStatusButtonProps) {
+function ConnectionStatusButton({ icon, text, isActive, color }: ConnectionStatusButtonProps) {
   return (
     <AntdButton
       icon={icon}
@@ -258,7 +225,7 @@ function ConnectionStatusButton({ icon, text, isActive }: ConnectionStatusButton
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        color: isActive ? "rgba(0, 205, 27, 1)" : "rgba(205, 205, 205, 1)",
+        color: color ?? (isActive ? "rgba(0, 205, 27, 1)" : "rgba(205, 205, 205, 1)"),
         fontSize: 12,
       }}
     >
@@ -267,70 +234,3 @@ function ConnectionStatusButton({ icon, text, isActive }: ConnectionStatusButton
   );
 }
 
-interface VpnStatusButtonProps {
-  text: string;
-  peerState: any;
-  vpnState: any;
-}
-
-function VpnStatusButton({ text, peerState, vpnState }: VpnStatusButtonProps) {
-  const getVpnColor = () => {
-    if (peerState === "connected" && vpnState === "connected") {
-      return "rgb(22, 152, 217,1)";
-    }
-    return vpnState === "logined" ? "rgba(0, 205, 27, 1)" : "rgba(205, 205, 205, 1)";
-  };
-
-  return (
-    <AntdButton
-      icon={
-        <div style={{
-          width: "8px",
-          height: "8px",
-          borderRadius: "50%",
-          backgroundColor: getVpnColor(),
-        }}></div>
-      }
-      type="text"
-      size="small"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: 12,
-      }}
-    >
-      {text}
-    </AntdButton>
-  );
-}
-
-interface LedStatusButtonProps {
-  ledState: boolean | undefined;
-  text: string;
-}
-
-function LedStatusButton({ ledState, text }: LedStatusButtonProps) {
-  return (
-    <AntdButton
-      icon={
-        <div style={{
-          width: "8px",
-          height: "8px",
-          borderRadius: "50%",
-          backgroundColor: ledState ? "rgba(0, 205, 27, 1)" : "rgba(205, 205, 205, 1)",
-        }}></div>
-      }
-      type="text"
-      size="small"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontSize: 12,
-      }}
-    >
-      {text}
-    </AntdButton>
-  );
-}

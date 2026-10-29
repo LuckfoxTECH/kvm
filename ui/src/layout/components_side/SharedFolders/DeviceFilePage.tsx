@@ -1,6 +1,6 @@
 import { FileManager } from "@/layout/components_side/SharedFolders/FileManager";
 
-export default function DeviceFilePage() {
+export default function DeviceFilePage({ hideTitle }: { hideTitle?: boolean }) {
   return (
     <FileManager
       mediaType="local"
@@ -9,6 +9,7 @@ export default function DeviceFilePage() {
       getSpaceMethod="getStorageSpace"
       deleteFileMethod="deleteStorageFile"
       downloadUrlPrefix="/storage/download"
+      hideTitle={hideTitle}
     />
   );
 }

@@ -6,7 +6,7 @@ import { isMobile } from "react-device-detect";
 import { ConfirmDialog } from "@components/ConfirmDialog";
 import { SettingsPageHeader } from "@components/Settings/SettingsPageheader";
 import { TextAreaWithLabel } from "@components/TextArea";
-import { useSettingsStore, useHidStore } from "@/hooks/stores";
+import { useSettingsStore } from "@/hooks/stores";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import api from "@/api";
 import { isOnDevice } from "@/main";
@@ -19,9 +19,6 @@ export default function SettingsAdvanced() {
 
   const [sshKey, setSSHKey] = useState<string>("");
   const setDeveloperMode = useSettingsStore(state => state.setDeveloperMode);
-  const [usbEmulationEnabled, setUsbEmulationEnabled] = useState(false);
-  const [usbEnhancedDetectionEnabled, setUsbEnhancedDetectionEnabled] =
-    useState(true);
   const [showLoopbackWarning, setShowLoopbackWarning] = useState(false);
   const [showRebootConfirm, setShowRebootConfirm] = useState(false);
   const [showConfigEdit, setShowConfigEdit] = useState(false);
@@ -37,23 +34,11 @@ export default function SettingsAdvanced() {
   const [showApiKeyClearWarning, setShowApiKeyClearWarning] = useState(false);
 
   const settings = useSettingsStore();
-  const isReinitializingGadget = useHidStore(state => state.isReinitializingGadget);
-  const setIsReinitializingGadget = useHidStore(state => state.setIsReinitializingGadget);
 
   useEffect(() => {
     send("getSSHKeyState", {}, resp => {
       if ("error" in resp) return;
       setSSHKey(resp.result as string);
-    });
-
-    send("getUsbEmulationState", {}, resp => {
-      if ("error" in resp) return;
-      setUsbEmulationEnabled(resp.result as boolean);
-    });
-
-    send("getUsbEnhancedDetection", {}, resp => {
-      if ("error" in resp) return;
-      setUsbEnhancedDetectionEnabled(resp.result as boolean);
     });
 
     send("getLocalLoopbackOnly", {}, resp => {
@@ -75,47 +60,6 @@ export default function SettingsAdvanced() {
       setDeveloperMode(Boolean(state?.enabled));
     });
   }, [send, setDeveloperMode]);
-
-  const getUsbEmulationState = useCallback(() => {
-    send("getUsbEmulationState", {}, resp => {
-      if ("error" in resp) return;
-      setUsbEmulationEnabled(resp.result as boolean);
-    });
-  }, [send]);
-
-  const handleUsbEmulationToggle = useCallback(
-    (enabled: boolean) => {
-      send("setUsbEmulationState", { enabled: enabled }, resp => {
-        if ("error" in resp) {
-          notifications.error(
-            `Failed to ${enabled ? "enable" : "disable"} USB emulation: ${resp.error.data || "Unknown error"}`,
-          );
-          return;
-        }
-        setUsbEmulationEnabled(enabled);
-        getUsbEmulationState();
-      });
-    },
-    [getUsbEmulationState, send],
-  );
-
-  const handleUsbEnhancedDetectionToggle = useCallback(
-    (enabled: boolean) => {
-      send("setUsbEnhancedDetection", { enabled }, resp => {
-        if ("error" in resp) {
-          notifications.error(
-            `Failed to ${enabled ? "enable" : "disable"} USB enhanced detection: ${resp.error.data || "Unknown error"}`,
-          );
-          return;
-        }
-        setUsbEnhancedDetectionEnabled(enabled);
-        notifications.success(
-          enabled ? "USB enhanced detection enabled" : "USB enhanced detection disabled",
-        );
-      });
-    },
-    [send],
-  );
 
   const handleDevModeToggle = useCallback(
     (enabled: boolean) => {
@@ -456,61 +400,6 @@ export default function SettingsAdvanced() {
               window.location.reload();
             }}
           />
-        </SettingsItem>
-
-        <SettingsItem
-          title={$at("USB detection enhancement")}
-          description={$at("The DISC state is also checked during USB status retrieval")}
-          noCol
-        >
-          <Checkbox
-            checked={usbEnhancedDetectionEnabled}
-            onChange={e => handleUsbEnhancedDetectionToggle(e.target.checked)}
-          />
-        </SettingsItem>
-
-        <SettingsItem
-          title={$at("USB Emulation")}
-          description={$at("Control the USB emulation state")}
-        >
-          <AntdButton
-
-            type="primary"
-            className={`${isMobile?"w-full":""}`}
-            onClick={() => handleUsbEmulationToggle(!usbEmulationEnabled)}
-          >
-            {
-              usbEmulationEnabled ? $at("Disable USB Emulation") : $at("Enable USB Emulation")
-            }
-          </AntdButton>
-        </SettingsItem>
-
-        <SettingsItem
-          title={$at("USB Gadget Reinitialize")}
-          description={$at("Reinitialize USB gadget configuration")}
-        >
-          <AntdButton
-            type="primary"
-            className={`${isMobile?"w-full":""}`}
-            disabled={isReinitializingGadget}
-            loading={isReinitializingGadget}
-            onClick={() => {
-              if (isReinitializingGadget) return;
-              setIsReinitializingGadget(true);
-              send("reinitializeUsbGadget", {}, resp => {
-                setIsReinitializingGadget(false);
-                if ("error" in resp) {
-                  notifications.error(
-                    `Failed to reinitialize USB gadget: ${resp.error.data || "Unknown error"}`,
-                  );
-                  return;
-                }
-                notifications.success("USB gadget reinitialized successfully");
-              });
-            }}
-          >
-            {$at("Reinitialize USB Gadget")}
-          </AntdButton>
         </SettingsItem>
 
         <SettingsItem
