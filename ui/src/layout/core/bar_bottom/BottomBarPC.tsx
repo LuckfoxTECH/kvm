@@ -29,8 +29,6 @@ import {
 import { keys, modifiers } from "@/keyboardMappings";
 import { keyboards } from "@/keyboardLayouts";
 import BottomPopoverButton from "@components/PopoverButton";
-import MousePanel from "@components/MousePanel";
-import KeyboardPanel from "@/layout/components_bottom/keyboard/KeyboardPanel";
 import useUsbEpModeData from "@/layout/components_bottom/usbepmode/useUsbEpModeData";
 import BarIconButton from "@/layout/core/bar_bottom/BarIconButton";
 import RemoteStatusPanel, { remoteIconColor } from "@/layout/core/bar_bottom/RemoteStatusPanel";
@@ -195,12 +193,17 @@ export default function BottomBarPC() {
           )}
           <div style={{ width: "1px", height: "100%" }}
                className={"bg-[rgba(229,229,229,1)] dark:bg-[rgba(56,56,56,1)]"} />
-          <BottomPopoverButton
-            buttonText={$at("Keyboard")}
-            iconOnly
-            buttonIconNode={
-              // icon and LED cluster live in one node so hovering anywhere on
-              // the group reveals the "Keyboard" label
+          <BarIconButton
+            active={sidebarView === "KeyboardPanel"}
+            onClick={() => {
+              setDisableFocusTrap(true);
+              toggleSidebarView("KeyboardPanel");
+            }}
+            label={$at("Keyboard")}
+            style={{ paddingLeft: 4, paddingRight: 4 }}
+            icon={
+              // icon and LED cluster live in one node so the indicators stay
+              // visible on the bar instead of only inside the panel
               <div className="flex items-center">
                 <span className="pl-1 pr-1">
                   {isDark ? <Keyboard2SVG fontSize={16} /> : <KeyboardSVG fontSize={16} />}
@@ -220,18 +223,18 @@ export default function BottomBarPC() {
                 <span className="pl-1 text-xs opacity-70" style={{ fontSize: 12 }}>{layoutAbbrev}</span>
               </div>
             }
-            align="left"
-            panelContent={<KeyboardPanel />}
           />
           <div style={{ width: "1px", height: "100%" }}
                className={"bg-[rgba(229,229,229,1)] dark:bg-[rgba(56,56,56,1)]"} />
                  
-            <BottomPopoverButton
-              buttonText={$at("Mouse")}
-              buttonIconNode={<MouseSVG fontSize={16} />}
-              align="left"
-              iconOnly
-              panelContent={<MousePanel />}
+            <BarIconButton
+              icon={<MouseSVG fontSize={16} />}
+              label={$at("Mouse")}
+              active={sidebarView === "MousePanel"}
+              onClick={() => {
+                setDisableFocusTrap(true);
+                toggleSidebarView("MousePanel");
+              }}
             />
           <div style={{ width: "1px", height: "100%" }}
                className={"bg-[rgba(229,229,229,1)] dark:bg-[rgba(56,56,56,1)]"} />

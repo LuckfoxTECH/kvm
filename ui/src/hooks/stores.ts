@@ -413,9 +413,17 @@ export const useVideoStore = create<VideoState>(set => ({
 // something the UI can guess from here.
 export type KeyboardLedSync = "browser" | "host";
 
+// Which element the fullscreen button targets. "page" keeps our own layout,
+// overlays and screen orientation; "video" hands the stream to the browser's
+// native video player, which is what some embedded webviews support best.
+export type FullscreenMode = "page" | "video";
+
 interface SettingsState {
   language: string;
   setLanguage: (language: string) => void;
+
+  fullscreenMode: FullscreenMode;
+  setFullscreenMode: (mode: FullscreenMode) => void;
 
   isCursorHidden: boolean;
   setCursorVisibility: (enabled: boolean) => void;
@@ -506,6 +514,9 @@ export const useSettingsStore = create(
     set => ({
       language: "en",
       setLanguage: language => set({ language }),
+
+      fullscreenMode: "page",
+      setFullscreenMode: mode => set({ fullscreenMode: mode }),
 
       isCursorHidden: false,
       setCursorVisibility: enabled => set({ isCursorHidden: enabled }),
@@ -600,6 +611,8 @@ export const useSettingsStore = create(
       merge: (persisted, current) => {
         const merged = { ...current, ...(persisted as Partial<SettingsState>) };
         merged.keyboardLedSync = merged.keyboardLedSync === "browser" ? "browser" : "host";
+        // A profile written by an older build has no fullscreenMode at all.
+        merged.fullscreenMode = merged.fullscreenMode === "video" ? "video" : "page";
         return merged;
       },
     },

@@ -16,11 +16,12 @@ import { usePointerLock } from "@/layout/core/desktop/hooks/usePointerLock";
 import { useFullscreen } from "@/layout/core/desktop/hooks/useFullscreen";
 import { useKeyboardEvents } from "@/layout/core/desktop/hooks/useKeyboardEvents";
 import { useMouseEvents } from "@/layout/core/desktop/hooks/useMouseEvents";
+import { usesAbsolutePosition } from "@/hooks/mouseMode";
 import { useVideoOverlays } from "@/layout/core/desktop/hooks/useVideoOverlays";
 import { VideoContainer } from "@components/Video/VideoContainer";
 import { VideoElement } from "@components/Video/VideoElement";
 import StatsTobbar from "@components/Sidebar/StatsTopbar";
-import KeyboardPanel from "@/layout/components_bottom/keyboard/KeyboardPanel";
+import KeyboardSide from "@/layout/components_side/Keyboard/KeyboardSide";
 import Clipboard from "@/layout/components_side/Clipboard/Clipboard";
 import SettingsModal from "@/layout/components_setting";
 import  { MacroMoreList } from "@/layout/components_side/Macros/MacroTopBar";
@@ -28,7 +29,7 @@ import { useMacrosSideTitleState , useHidStore, useMouseStore, useSettingsStore,
 import MobileTerminal from "@/layout/components_bottom/terminal/index.mobile";
 import { dark_bg_desktop, dark_bg_style_fun } from "@/layout/theme_color";
 import PowerControl from "@/layout/components_side/Power";
-import MousePanel from "@components/MousePanel";
+import MouseSide from "@/layout/components_side/Mouse/MouseSide";
 import EnhancedDrawer from "@components/Sidebar/SidebarDrawer";
 import SettingsVideoSide from "@/layout/components_side/Video/SettingsVideoSide";
 import ConnectionStatsSidebar from "@components/ConnectionStats";
@@ -139,7 +140,7 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
   const lastAbsPosRef = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
-    if (mouseMode === "absolute") {
+    if (usesAbsolutePosition(mouseMode)) {
       lastAbsPosRef.current = { x: mouseX, y: mouseY };
     }
   }, [mouseX, mouseY, mouseMode]);
@@ -416,16 +417,18 @@ export default function MobileDesktop({ isFullscreen }: { isFullscreen?: number 
       />
 
       <EnhancedDrawer
+        title={$at("Keyboard")}
         targetView={"KeyboardPanel"}
-        className={""}
+        className={"p-[20px]"}
         placement={"bottom"}
-        drawerRender={() => (<KeyboardPanel/>)}
+        drawerRender={() => (<KeyboardSide/>)}
       />
       <EnhancedDrawer
+        title={$at("Mouse")}
         targetView={"MousePanel"}
-        className={""}
+        className={"p-[20px]"}
         placement={"bottom"}
-        drawerRender={() => (<MousePanel/>)}
+        drawerRender={() => (<MouseSide/>)}
       />
       <EnhancedDrawer
         title={$at("USB")}

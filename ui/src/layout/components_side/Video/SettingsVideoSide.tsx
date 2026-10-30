@@ -1,12 +1,12 @@
 import { useState, useEffect } from "react";
-import { Button as AntdButton , Slider , Checkbox, Select, Modal, InputNumber, Tabs, Typography } from "antd";
+import { Button as AntdButton , Slider , Checkbox, Modal, InputNumber, Tabs, Typography } from "antd";
 import { useReactAt } from "i18n-auto-extractor/react";
-import { isMobile } from "react-device-detect";
 
 import { TextAreaWithLabel } from "@components/TextArea";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import { useSettingsStore } from "@/hooks/stores";
 import { SettingsItem, SettingsItemNew } from "@components/Settings/SettingsView";
+import SettingsSelect from "@components/Settings/SettingsSelect";
 
 import notifications from "../../../notifications";
 
@@ -508,10 +508,9 @@ export default function SettingsVideoSide() {
       <div className="space-y-4">
         <SettingsItem
           title={$at("Encodec Type")}
-          description={""}
+          description={$at("Codec used for the video stream")}
         >
-          <Select
-            className={isMobile ? "w-full bg-transparent" : ""}
+          <SettingsSelect
             value={streamEncodecType}
             options={[
               { value: "avc", label: "H.264 (AVC)" },
@@ -523,10 +522,9 @@ export default function SettingsVideoSide() {
 
         <SettingsItem
           title={$at("Stream Quality")}
-          description={""}
+          description={$at("Higher quality needs more bandwidth")}
         >
-          <Select
-            className={isMobile ? "w-full bg-transparent" : ""}
+          <SettingsSelect
             value={streamQuality}
             options={streamQualityOptions}
             onChange={e => handleStreamQualityChange(e)}
@@ -769,9 +767,7 @@ export default function SettingsVideoSide() {
           title="EDID"
           description={$at("Adjust the EDID settings for the display")}
         >
-          <Select
-            className={isMobile ? "w-full bg-transparent" : ""}
-
+          <SettingsSelect
             defaultValue={customEdidValue !== null ? "custom" : edid ?? undefined}
             value={customEdidValue !== null ? "custom" : edid ?? undefined}
             optionLabelProp={"label"}

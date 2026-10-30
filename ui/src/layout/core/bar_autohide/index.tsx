@@ -7,6 +7,11 @@ import { dark_font_style, text_primary_color } from "@/layout/theme_color";
 
 /** Default linger time before the unpinned bars slide back out (ms). */
 const HIDE_DELAY_MS = 5000;
+/**
+ * Shorter linger time for touch screens: every reveal there is an explicit tap
+ * rather than a hover, and the bars cover the remote picture while they show.
+ */
+const HIDE_DELAY_TOUCH_MS = 3000;
 /** Height of the screen edge strip that reveals the bars while they are hidden. */
 const HOT_ZONE_HEIGHT_PX = 10;
 /**
@@ -72,7 +77,7 @@ export function useBarsAutoHide() {
     hideTimerRef.current = setTimeout(() => {
       hideTimerRef.current = null;
       setBarsTemporarilyVisible(false);
-    }, HIDE_DELAY_MS);
+    }, HOVER_CAPABLE ? HIDE_DELAY_MS : HIDE_DELAY_TOUCH_MS);
   }, [cancelScheduledHide, setBarsTemporarilyVisible]);
 
   const scheduleHideBars = useCallback(() => {

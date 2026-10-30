@@ -5,6 +5,7 @@ import { isMobile } from "react-device-detect";
 
 import { SettingsPageHeader } from "@components/Settings/SettingsPageheader";
 import { useSettingsStore } from "@/hooks/stores";
+import type { FullscreenMode } from "@/hooks/stores";
 import { SettingsItem } from "@components/Settings/SettingsView";
 import enJSON from '@/locales/en.json';
 import zhJSON from '@/locales/zh.json';
@@ -22,6 +23,12 @@ export default function SettingsGeneral() {
   const { setThemeMode } = useTheme();
   const language = useSettingsStore(state => state.language);
   const setLanguage = useSettingsStore(state => state.setLanguage);
+  const fullscreenMode = useSettingsStore(state => state.fullscreenMode);
+  const setFullscreenMode = useSettingsStore(state => state.setFullscreenMode);
+
+  const handleFullscreenModeChange = (value: string) => {
+    setFullscreenMode(value as FullscreenMode);
+  };
 
   // Language Change Handler
   const handleLanguageChange = (value: string) => {
@@ -98,6 +105,27 @@ export default function SettingsGeneral() {
             >
               <Option value="en" className={dark_font_style}>{$at('English')}</Option>
               <Option value="zh" className={dark_font_style}>{$at('中文')}</Option>
+            </Select>
+          </div>
+        </SettingsItem>
+      </div>
+
+      <div className="space-y-4">
+        <SettingsItem
+          title={$at("Fullscreen Mode")}
+          description={$at(
+            "Choose how the fullscreen button behaves. Full page fullscreen is not supported on iOS, use Video Only there.",
+          )}
+          className={`${isMobile ? "w-full flex-col" : ""}`}
+        >
+          <div className={`space-y-2 ${isMobile ? "w-full" : "w-[37%]"}`}>
+            <Select
+              value={fullscreenMode}
+              onChange={handleFullscreenModeChange}
+              className={`!w-full !h-[36px]`}
+            >
+              <Option value="page" className={dark_font_style}>{$at('Whole Page')}</Option>
+              <Option value="video" className={dark_font_style}>{$at('Video Only')}</Option>
             </Select>
           </div>
         </SettingsItem>

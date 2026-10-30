@@ -49,7 +49,7 @@ import { DEVICE_API } from "@/ui.config";
 import notifications from "@/notifications";
 import BarTop from "@/layout/core/bar_top/index";
 import BottomBar from "@/layout/core/bar_bottom/index";
-import { BarsHiddenHandle, BarsHotZones, useBarsAutoHide } from "@/layout/core/bar_autohide";
+import { BarsHiddenHandle, useBarsAutoHide } from "@/layout/core/bar_autohide";
 import { LocalVersionInfo } from "@/layout/components_setting/version/VersionContent";
 import Desktop from "@/layout/core/desktop/index";
 import { dark_bg_style_fun } from "@/layout/theme_color";
@@ -1063,7 +1063,9 @@ useEffect(() => {
   return (
     <FeatureFlagProvider appVersion={appVersion}>
       {sidebarView==null && topBarView == null && !hasConnectionFailed && isMobile}
-      <div className="h-full overflow-hidden">
+      {/* dvh instead of the layout viewport height: on mobile browsers 100% stretches
+          under the address bar, which hides the bottom bar of the UI. */}
+      <div className="h-dvh overflow-hidden">
 
         {!lowSystemVersionPromptDismissed && isSystemVersionTooLow && (
           <div className="absolute inset-0 z-[19999] flex items-center justify-center bg-black/60">
@@ -1113,11 +1115,9 @@ useEffect(() => {
           </div>
         </FocusTrap>
 
-        <BarsHotZones
-          barsVisible={barsVisible}
-          revealBars={revealBars}
-          scheduleHideBars={scheduleHideBars}
-        />
+        {/* No edge hot zones on touch layouts: the top edge strip competes with the
+            notification shade, and the bottom one fires during the fullscreen
+            swipe gesture. The bars are revealed by the handle below instead. */}
         <BarsHiddenHandle visible={!barsVisible} revealBars={revealBars} />
         <div className={`grid h-full grid-rows-(--grid-headerBody) select-none ${dark_bg_style_fun(isDark)}`}>
 

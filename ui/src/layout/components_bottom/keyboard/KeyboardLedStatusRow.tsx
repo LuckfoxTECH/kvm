@@ -40,9 +40,10 @@ function LedDot({ on, label }: LedDotProps) {
   );
 }
 
-// KeyboardLedStatusRow is the strip that used to sit under the phone bottom
-// bar. It moved into the keyboard drawer, next to the layout it belongs to,
-// which frees a whole row in the bar.
+// KeyboardLedStatusRow is the strip that used to sit under the phone bottom bar.
+// The desktop bar renders the same three LEDs itself, so this row is drawn on
+// mobile only, where the bar has no room for them. Padding is left to the drawer
+// content wrapper so it lines up with the settings items below it.
 export default function KeyboardLedStatusRow() {
   const { $at } = useReactAt();
   const { isDark } = useThemeSettings();
@@ -54,7 +55,7 @@ export default function KeyboardLedStatusRow() {
 
   return (
     <div
-      className="px-[20px] pt-4 pb-1 flex items-center gap-4"
+      className="pt-2 pb-1 flex items-center gap-4"
       style={{ color: isDark ? "rgba(255,255,255,0.85)" : "rgba(0,0,0,0.85)" }}
     >
       <LedDot on={ledsKnown ? keyboardLedState?.num_lock : undefined} label={$at("Num")} />

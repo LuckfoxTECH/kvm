@@ -12,6 +12,8 @@ import SettingsVideoSide from "@/layout/components_side/Video/SettingsVideoSide"
 import SettingsMacros from "@/layout/components_side/Macros";
 import SharedFolders from "@/layout/components_side/SharedFolders";
 import VirtualMediaSource from "@/layout/components_side/VirtualMediaSource";
+import KeyboardSide from "@/layout/components_side/Keyboard/KeyboardSide";
+import MouseSide from "@/layout/components_side/Mouse/MouseSide";
 
 interface SidebarContainerProps {
   readonly sidebarView: string | null;
@@ -42,6 +44,13 @@ export default  function SidebarContainer(props: SidebarContainerProps) {
             <StatsSidebar title={$at("Connection Stats")} targetView={"connection-stats"} className={"p-[20px]"}>
             <ConnectionStatsSidebar />
           </StatsSidebar>}
+
+          <StatsSidebar title={$at("Keyboard")} targetView={"KeyboardPanel"}>
+            <KeyboardSide />
+          </StatsSidebar>
+          <StatsSidebar title={$at("Mouse")} targetView={"MousePanel"}>
+            <MouseSide />
+          </StatsSidebar>
 
           <StatsSidebar title={$at("Clipboard")} targetView={"Clipboard"}>
             <Clipboard />
