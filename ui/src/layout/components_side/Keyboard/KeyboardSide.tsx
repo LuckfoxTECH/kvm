@@ -33,6 +33,10 @@ export default function KeyboardSide() {
   const setShowPressedKeys = useSettingsStore(state => state.setShowPressedKeys);
   const swapCommandControl = useSettingsStore(state => state.swapCommandControl);
   const setSwapCommandControl = useSettingsStore(state => state.setSwapCommandControl);
+  const isolateBrowserShortcuts = useSettingsStore(state => state.isolateBrowserShortcuts);
+  const setIsolateBrowserShortcuts = useSettingsStore(
+    state => state.setIsolateBrowserShortcuts,
+  );
   const keyboardLedSync = useSettingsStore(state => state.keyboardLedSync);
   const setKeyboardLedSync = useSettingsStore(state => state.setKeyboardLedSync);
   const resetKeyboardLedTruth = useHidStore(state => state.resetKeyboardLedTruth);
@@ -186,6 +190,20 @@ export default function KeyboardSide() {
           <Checkbox
             checked={swapCommandControl}
             onChange={e => setSwapCommandControl(e.target.checked)}
+          />
+        </SettingsItem>
+
+        <SettingsItem
+          title={$at("Isolate Browser Shortcuts")}
+          description={$at(
+            "Send Ctrl, Alt and function keys to the host only; Win, Cmd and Alt+Tab still reach this system",
+          )}
+          noCol
+          className="flex-row items-center"
+        >
+          <Checkbox
+            checked={isolateBrowserShortcuts}
+            onChange={e => setIsolateBrowserShortcuts(e.target.checked)}
           />
         </SettingsItem>
       </div>

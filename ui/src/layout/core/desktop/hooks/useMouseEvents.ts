@@ -533,10 +533,12 @@ export const useMouseEvents = (
       if (e.ctrlKey) {
         // A trackpad pinch arrives as ctrl+wheel with no physical Ctrl held, so the
         // chord has to be told apart from a real Ctrl press before it reaches the
-        // host: only a real press is something the target should act on.
+        // host: only a real press is something the target should act on. Either way
+        // the page must not zoom out from under the user when isolation is on.
         const physicalCtrl = useHidStore
           .getState()
           .activeModifiers.some(m => m & MODIFIER_CONTROL);
+        if (settings.isolateBrowserShortcuts) e.preventDefault();
         if (!physicalCtrl) return;
       }
 
@@ -657,9 +659,11 @@ export const useMouseEvents = (
     videoElmRefValue.addEventListener("pointerdown", eventHandler, { signal });
     videoElmRefValue.addEventListener("pointerup", eventHandler, { signal });
     videoElmRefValue.addEventListener("pointercancel", eventHandler, { signal });
+    // Not passive: the ctrl+wheel guard above has to be able to cancel the
+    // browser's page zoom.
     videoElmRefValue.addEventListener("wheel", mouseWheelHandler, {
       signal,
-      passive: true,
+      passive: false,
     });
 
     if (isRelativeMouseMode) {

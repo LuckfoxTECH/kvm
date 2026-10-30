@@ -769,6 +769,8 @@
   "d64d99ed3d": "Draw the keys held down",
   "d7792645e9": "Swap Command and Control",
   "97e3b183a9": "Send Command as Control",
+  "895980266c": "Isolate Browser Shortcuts",
+  "068af20047": "Send Ctrl, Alt and function keys to the host only; Win, Cmd and Alt+Tab still reach this system",
   "f2334e6143": "Codec used for the video stream",
   "d33783bc2b": "Higher quality needs more bandwidth",
   "6716df9c26": "Host Only",

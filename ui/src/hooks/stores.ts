@@ -486,6 +486,13 @@ interface SettingsState {
   swapCommandControl: boolean;
   setSwapCommandControl: (enabled: boolean) => void;
 
+  // Keeps the chords sent to the host from acting on this browser: Ctrl+S, Ctrl+P,
+  // zoom keys, wheel zoom and the like are cancelled while the keys are forwarded.
+  // Only chords the browser honours can be held back; combinations the operating
+  // system owns (Win, Cmd, Alt+Tab) still act locally.
+  isolateBrowserShortcuts: boolean;
+  setIsolateBrowserShortcuts: (enabled: boolean) => void;
+
   overrideCtrlV: boolean;
   setOverrideCtrlV: (enabled: boolean) => void;
   pasteShortcutEnabled: boolean;
@@ -580,6 +587,8 @@ export const useSettingsStore = create(
 
       swapCommandControl: false,
       setSwapCommandControl: enabled => set({ swapCommandControl: enabled }),
+      isolateBrowserShortcuts: true,
+      setIsolateBrowserShortcuts: enabled => set({ isolateBrowserShortcuts: enabled }),
 
       overrideCtrlV: false,
       setOverrideCtrlV: enabled => set({ overrideCtrlV: enabled }),

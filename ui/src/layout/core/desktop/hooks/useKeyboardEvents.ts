@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 
 import  useKeyboard  from "@/hooks/useKeyboard";
 import { useHidStore, useSettingsStore, useUiStore } from "@/hooks/stores";
@@ -65,6 +65,40 @@ export const useKeyboardEvents = (
   const keyboardLayout = useSettingsStore(state => state.keyboardLayout);
   const appleImeKeys =
     String(keyboardLayout ?? "").replace(/_/g, "-").toLowerCase() === "ja-jp-mac";
+  const isolateBrowserShortcuts = useSettingsStore(
+    state => state.isolateBrowserShortcuts,
+  );
+
+  // Best effort second half of the isolation switch: the Keyboard Lock API lets a
+  // fullscreen page receive chords the browser otherwise keeps for itself (Ctrl+W,
+  // Ctrl+T, Alt+Tab on some platforms). Outside fullscreen the request is refused,
+  // so re-arm on every transition and unlock as soon as isolation is switched off.
+  useEffect(() => {
+    const keyboard = (
+      navigator as Navigator & {
+        keyboard?: { lock?: () => Promise<void>; unlock?: () => void };
+      }
+    ).keyboard;
+    if (!keyboard?.lock) return;
+
+    const sync = () => {
+      if (isolateBrowserShortcuts && document.fullscreenElement) {
+        const request = keyboard.lock?.();
+        request?.catch(() => {
+          // Refused outside fullscreen, or unsupported in this browser.
+        });
+      } else {
+        keyboard.unlock?.();
+      }
+    };
+
+    sync();
+    document.addEventListener("fullscreenchange", sync);
+    return () => {
+      document.removeEventListener("fullscreenchange", sync);
+      keyboard.unlock?.();
+    };
+  }, [isolateBrowserShortcuts]);
 
   const handleModifierKeys = useCallback((e: KeyboardEvent, activeModifiers: number[]) => {
     const { shiftKey, ctrlKey, altKey, metaKey } = e;
@@ -94,7 +128,12 @@ export const useKeyboardEvents = (
       return;
     }
 
-    e.preventDefault();
+    // Cancel the browser's own handling of the chord while it is forwarded: without
+    // this Ctrl+S opens the save dialog, Ctrl+P prints, Ctrl+plus zooms the page and
+    // the host never sees a clean keystroke. Chords the operating system reserves
+    // (Win, Cmd, Alt+Tab) cannot be cancelled from a page, so isolation is best
+    // effort by nature.
+    if (isolateBrowserShortcuts) e.preventDefault();
     const prev = useHidStore.getState();
     const code = getAdjustedKeyCode(e, appleImeKeys);
 
@@ -123,12 +162,14 @@ export const useKeyboardEvents = (
     }
 
     sendKeyboardEvent([...new Set(newKeys)], [...new Set(newModifiers)]);
-  }, [handleModifierKeys, sendKeyboardEvent, isKeyboardLedManagedByHost, setIsNumLockActive, setIsCapsLockActive, setIsScrollLockActive, pasteShortcutEnabled, pasteShortcut, pasteCaptureRef, isReinitializingGadget, isOcrMode, appleImeKeys]);
+  }, [handleModifierKeys, sendKeyboardEvent, isKeyboardLedManagedByHost, setIsNumLockActive, setIsCapsLockActive, setIsScrollLockActive, pasteShortcutEnabled, pasteShortcut, pasteCaptureRef, isReinitializingGadget, isOcrMode, appleImeKeys, isolateBrowserShortcuts]);
 
   const keyUpHandler = useCallback((e: KeyboardEvent) => {
     if (isOcrMode) return;
     if (isReinitializingGadget) return;
-    e.preventDefault();
+    // The release is cancelled for the same reason as the press: a key that acts on
+    // this browser on the way up leaves the host with a latched modifier.
+    if (isolateBrowserShortcuts) e.preventDefault();
     const prev = useHidStore.getState();
     // the same normalisation as keydown, otherwise a key pressed under its raw
     // code is looked up and released under its normalised one
@@ -149,7 +190,7 @@ export const useKeyboardEvents = (
     // Always forced: a release that gets swallowed leaves the key latched on
     // the host, which then auto-repeats it.
     sendKeyboardEvent([...new Set(newKeys)], [...new Set(newModifiers)], true);
-  }, [handleModifierKeys, sendKeyboardEvent, isKeyboardLedManagedByHost, setIsNumLockActive, setIsCapsLockActive, setIsScrollLockActive, isOcrMode, isReinitializingGadget, appleImeKeys]);
+  }, [handleModifierKeys, sendKeyboardEvent, isKeyboardLedManagedByHost, setIsNumLockActive, setIsCapsLockActive, setIsScrollLockActive, isOcrMode, isReinitializingGadget, appleImeKeys, isolateBrowserShortcuts]);
 
   const setupKeyboardEvents = useCallback(() => {
     const abortController = new AbortController();
