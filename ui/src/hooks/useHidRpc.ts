@@ -12,8 +12,11 @@ import {
   KeypressKeepAliveMessage,
   KeypressReportMessage,
   MouseReportMessage,
+  PenReportMessage,
   PointerReportMessage,
   RpcMessage,
+  TouchContactReport,
+  TouchReportMessage,
   unmarshalHidRpcMessage,
 } from "./hidRpc";
 
@@ -271,6 +274,22 @@ export function useHidRpc(onHidRpcMessage?: (payload: RpcMessage) => void) {
     [sendMessage],
   );
 
+  const reportPenEvent = useCallback(
+    (x: number, y: number, flags: number, pressure: number) => {
+      sendMessage(new PenReportMessage(x, y, flags, pressure));
+    },
+    [sendMessage],
+  );
+
+  // Touch reports are stateful: each one carries every finger currently down, so
+  // an empty list releases the surface.
+  const reportTouchEvent = useCallback(
+    (contacts: TouchContactReport[]) => {
+      sendMessage(new TouchReportMessage(contacts));
+    },
+    [sendMessage],
+  );
+
   const reportKeyboardMacroEvent = useCallback(
     (steps: KeyboardMacroStep[]) => {
       sendMessage(new KeyboardMacroReportMessage(false, steps.length, steps));
@@ -329,6 +348,8 @@ export function useHidRpc(onHidRpcMessage?: (payload: RpcMessage) => void) {
     reportKeypressEvent,
     reportAbsMouseEvent,
     reportRelMouseEvent,
+    reportPenEvent,
+    reportTouchEvent,
     reportKeyboardMacroEvent,
     cancelOngoingKeyboardMacro,
     reportKeypressKeepAlive,

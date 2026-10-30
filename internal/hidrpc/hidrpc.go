@@ -16,6 +16,8 @@ const (
 	TypeWheelReport               MessageType = 0x04
 	TypeKeypressReport            MessageType = 0x05
 	TypeKeypressKeepAliveReport   MessageType = 0x09
+	TypePenReport                 MessageType = 0x0A
+	TypeTouchReport               MessageType = 0x0B
 	TypeMouseReport               MessageType = 0x06
 	TypeKeyboardMacroReport       MessageType = 0x07
 	TypeCancelKeyboardMacroReport MessageType = 0x08
@@ -39,7 +41,7 @@ func GetQueueIndex(messageType MessageType) int {
 		return 0
 	case TypeKeyboardReport, TypeKeypressReport, TypeKeypressKeepAliveReport, TypeKeyboardMacroReport, TypeKeyboardLedState, TypeKeydownState, TypeKeyboardMacroState:
 		return 1
-	case TypePointerReport, TypeMouseReport, TypeWheelReport:
+	case TypePointerReport, TypeMouseReport, TypeWheelReport, TypePenReport, TypeTouchReport:
 		return 2
 	// we don't want to block the queue for this message
 	case TypeCancelKeyboardMacroReport:

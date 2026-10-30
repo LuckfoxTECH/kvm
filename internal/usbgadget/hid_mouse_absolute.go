@@ -5,6 +5,20 @@ import (
 	"os"
 )
 
+const (
+	// absHidReportLength is the report_length of the absolute HID function: the
+	// report ID plus the buttons, X, Y, wheel and AC Pan fields. It holds exactly one
+	// collection, so every write fills it and no padding is needed.
+	//
+	// The pen and the touch screen live on their own HID function (hid.usb3); see
+	// hid_pen_touch.go for why they must not share this interface.
+	absHidReportLength = 8
+
+	// absReportIDMouse is the report ID of the only collection of this function, the
+	// absolute pointer that desktop hosts turn into a cursor.
+	absReportIDMouse = 1
+)
+
 var absoluteMouseConfig = gadgetConfigItem{
 	order:      1001,
 	device:     "hid.usb1",
@@ -15,15 +29,16 @@ var absoluteMouseConfig = gadgetConfigItem{
 		"subclass":      "0",
 		"report_length": "8",
 	},
-	reportDesc: absoluteMouseCombinedReportDesc,
+	reportDesc: absoluteMouseReportDesc,
 }
 
-var absoluteMouseCombinedReportDesc = []byte{
+// mouseCollectionDesc is Report ID 1: the absolute pointer that desktop hosts
+// turn into a cursor with buttons and a wheel.
+var mouseCollectionDesc = []byte{
 	0x05, 0x01, // Usage Page (Generic Desktop Ctrls)
 	0x09, 0x02, // Usage (Mouse)
 	0xA1, 0x01, // Collection (Application)
 
-	// Report ID 1: Absolute Mouse Movement
 	0x85, 0x01, //     Report ID (1)
 	0x09, 0x01, //     Usage (Pointer)
 	0xA1, 0x00, //     Collection (Physical)
@@ -68,9 +83,24 @@ var absoluteMouseCombinedReportDesc = []byte{
 	0x75, 0x08, //         Report Size (8)
 	0x95, 0x01, //         Report Count (1)
 	0x81, 0x06, //         Input (Data, Var, Rel)
-	0xC0, //     End Collection
 
+	0xC0, //     End Collection
 	0xC0, // End Collection
+}
+
+// absoluteMouseReportDesc is the descriptor of the absolute HID function. It holds
+// a single mouse collection: anything else here would change how hosts group the
+// interface, and a digitizer usage in particular makes Linux hand the whole
+// interface to hid-multitouch and drop the cursor (see hid_pen_touch.go).
+var absoluteMouseReportDesc = mouseCollectionDesc
+
+// absHidReport frames a payload as a report of the absolute HID function: report
+// ID first, then the payload, then zeros up to absHidReportLength.
+func absHidReport(reportID byte, payload []byte) []byte {
+	report := make([]byte, absHidReportLength)
+	report[0] = reportID
+	copy(report[1:], payload)
+	return report
 }
 
 func (u *UsbGadget) absMouseWriteHidFile(data []byte) error {
@@ -116,6 +146,23 @@ func (u *UsbGadget) absMouseWriteHidFile(data []byte) error {
 	return nil
 }
 
+// writeAbsReport writes one report of the absolute HID function and marks the
+// gadget as recently used. Callers that also track pointer state must hold
+// absMouseLock themselves instead of calling this.
+func (u *UsbGadget) writeAbsReport(report []byte) error {
+	u.hidLifecycle.RLock()
+	defer u.hidLifecycle.RUnlock()
+
+	u.absMouseLock.Lock()
+	defer u.absMouseLock.Unlock()
+
+	if err := u.absMouseWriteHidFile(report); err != nil {
+		return err
+	}
+	u.resetUserInputTime()
+	return nil
+}
+
 func (u *UsbGadget) AbsMouseReport(x, y int, buttons uint8) error {
 	u.hidLifecycle.RLock()
 	defer u.hidLifecycle.RUnlock()
@@ -123,8 +170,7 @@ func (u *UsbGadget) AbsMouseReport(x, y int, buttons uint8) error {
 	u.absMouseLock.Lock()
 	defer u.absMouseLock.Unlock()
 
-	err := u.absMouseWriteHidFile([]byte{
-		1,             // Report ID 1
+	err := u.absMouseWriteHidFile(absHidReport(absReportIDMouse, []byte{
 		buttons,       // Buttons
 		uint8(x),      // X Low Byte
 		uint8(x >> 8), // X High Byte
@@ -132,7 +178,7 @@ func (u *UsbGadget) AbsMouseReport(x, y int, buttons uint8) error {
 		uint8(y >> 8), // Y High Byte
 		0,             // Wheel
 		0,             // AC Pan
-	})
+	}))
 	if err != nil {
 		return err
 	}
@@ -172,10 +218,9 @@ func (u *UsbGadget) AbsMouseWheelReport(wheelY, wheelX int8) error {
 	}
 
 	// The wheel shares the movement report, so the last position and button state
-	// have to be repeated: a shorter report is rejected by the gadget.
+	// have to be repeated: a report without them would move the cursor.
 	x, y := u.absMouseX, u.absMouseY
-	err := u.absMouseWriteHidFile([]byte{
-		1,                 // Report ID 1
+	err := u.absMouseWriteHidFile(absHidReport(absReportIDMouse, []byte{
 		u.absMouseButtons, // Buttons
 		uint8(x),          // X Low Byte
 		uint8(x >> 8),     // X High Byte
@@ -183,7 +228,7 @@ func (u *UsbGadget) AbsMouseWheelReport(wheelY, wheelX int8) error {
 		uint8(y >> 8),     // Y High Byte
 		byte(wheelY),      // Wheel (signed)
 		byte(wheelX),      // AC Pan (signed)
-	})
+	}))
 
 	u.resetUserInputTime()
 	return err

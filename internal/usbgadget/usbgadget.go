@@ -71,6 +71,9 @@ type UsbGadget struct {
 	relMouseHidFile *os.File
 	relMouseLock    sync.Mutex
 
+	penTouchHidFile *os.File
+	penTouchLock    sync.Mutex
+
 	keyboardState       KeyboardState
 	keyboardStateLock   sync.Mutex
 	keyboardStateCtx    context.Context
@@ -139,6 +142,7 @@ func newUsbGadget(name string, configMap map[string]gadgetConfigItem, enabledDev
 		keyboardLock:        sync.Mutex{},
 		absMouseLock:        sync.Mutex{},
 		relMouseLock:        sync.Mutex{},
+		penTouchLock:        sync.Mutex{},
 		txLock:              sync.Mutex{},
 		keyboardStateCtx:    keyboardCtx,
 		keyboardStateCancel: keyboardCancel,
@@ -191,6 +195,13 @@ func (u *UsbGadget) ResetHIDFiles() {
 		u.relMouseHidFile = nil
 	}
 	u.relMouseLock.Unlock()
+
+	u.penTouchLock.Lock()
+	if u.penTouchHidFile != nil {
+		u.penTouchHidFile.Close()
+		u.penTouchHidFile = nil
+	}
+	u.penTouchLock.Unlock()
 
 	u.log.Info().Msg("all HID file descriptors reset")
 }

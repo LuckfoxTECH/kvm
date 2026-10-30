@@ -87,6 +87,34 @@ func handleHidRPCMessage(message hidrpc.Message, session *Session, task *hidMacr
 			return
 		}
 		rpcErr = rpcRelMouseReport(mouseReport.DX, mouseReport.DY, mouseReport.Button)
+	case hidrpc.TypePenReport:
+		penReport, err := message.PenReport()
+		if err != nil {
+			hidRPCLogger.Warn().Err(err).Msg("failed to get pen report")
+			return
+		}
+		rpcErr = rpcPenReport(
+			penReport.X, penReport.Y,
+			penReport.IsTip(), penReport.IsBarrel(), penReport.IsInRange(),
+			penReport.Pressure,
+		)
+	case hidrpc.TypeTouchReport:
+		touchReport, err := message.TouchReport()
+		if err != nil {
+			hidRPCLogger.Warn().Err(err).Msg("failed to get touch report")
+			return
+		}
+		contacts := make([]usbgadget.TouchContact, 0, len(touchReport.Contacts))
+		for _, contact := range touchReport.Contacts {
+			contacts = append(contacts, usbgadget.TouchContact{
+				ID:      contact.ID,
+				X:       contact.X,
+				Y:       contact.Y,
+				Down:    contact.IsDown(),
+				InRange: contact.IsInRange(),
+			})
+		}
+		rpcErr = rpcTouchReport(contacts)
 	default:
 		hidRPCLogger.Warn().Uint8("type", uint8(message.Type())).Msg("unknown HID RPC message type")
 	}

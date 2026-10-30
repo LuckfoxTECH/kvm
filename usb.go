@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"kvm/internal/usbgadget"
@@ -212,6 +213,9 @@ func initUsbGadget() {
 			time.Sleep(2500 * time.Millisecond)
 		}
 	}()
+
+	usbLogger.Info().Msgf("USB gadget initialized: %s", usbFingerprintText())
+	startUsbHeartbeat()
 }
 
 func initSystemInfo() {
@@ -331,10 +335,133 @@ func initAutoMountImage() {
 	}()
 }
 
+// USB evidence logging.
+//
+// The failures reaching this device are rare and leave nothing behind once the
+// gadget is rebuilt, so the facts that separate them are emitted through the
+// normal logger and can be copied off the terminal:
+//   - usb_state / udc / configfs_udc / hidg nodes: which layer broke
+//   - dropped reports: reports thrown away while the gadget was not ready, which
+//     is why a lit but dead USB port used to be invisible
+//   - write failures: the endpoint refused the report
+var (
+	usbDropCount     atomic.Uint64
+	usbDropLastLog   atomic.Int64
+	usbWriteErrCount atomic.Uint64
+	usbWriteErrLast  atomic.Int64
+)
+
+// usbLogWindow limits how often a repeating symptom is logged, so a dead gadget
+// cannot flood the console while still leaving the first occurrence in place.
+const usbLogWindow = 5 * time.Second
+
+// readSysFileText returns a sysfs/procfs value with the trailing newline removed.
+func readSysFileText(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "<unreadable: " + err.Error() + ">"
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// usbFingerprintText describes the USB layers that a report has to pass through.
+// A host that sees nothing can fail at any of them, and they look identical from
+// the outside: no UDC bound by configfs, a UDC the kernel reports as not attached,
+// or a configured gadget whose /dev/hidgN nodes are missing.
+func usbFingerprintText() string {
+	parts := []string{"usb_state=" + getUSBStateCached()}
+
+	if entries, err := os.ReadDir("/sys/class/udc"); err == nil {
+		states := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			name := entry.Name()
+			states = append(states, name+":"+readSysFileText("/sys/class/udc/"+name+"/state"))
+		}
+		if len(states) == 0 {
+			states = append(states, "<none>")
+		}
+		parts = append(parts, "udc=["+strings.Join(states, " ")+"]")
+	} else {
+		parts = append(parts, "udc=<error: "+err.Error()+">")
+	}
+
+	parts = append(parts, "configfs_udc="+readSysFileText("/sys/kernel/config/usb_gadget/kvm/UDC"))
+
+	if gadget != nil {
+		nodes := make([]string, 0, 4)
+		for _, key := range []string{"keyboard", "absolute_mouse", "relative_mouse", "pen_touch"} {
+			path := gadget.HidgNodePath(key)
+			if _, err := os.Stat(path); err != nil {
+				path += "(absent)"
+			}
+			nodes = append(nodes, path)
+		}
+		parts = append(parts, "hidg=["+strings.Join(nodes, " ")+"]")
+	} else {
+		parts = append(parts, "hidg=<no gadget>")
+	}
+
+	return strings.Join(parts, " ")
+}
+
+// noteHidReportDropped records a report discarded because the gadget could not
+// accept it. These drops are silent by design, so without this line a port that
+// looks powered but moves nothing produces no evidence at all.
+func noteHidReportDropped(device string) {
+	total := usbDropCount.Add(1)
+	now := time.Now().UnixNano()
+	last := usbDropLastLog.Load()
+	if now-last < int64(usbLogWindow) || !usbDropLastLog.CompareAndSwap(last, now) {
+		return
+	}
+	usbLogger.Warn().
+		Str("device", device).
+		Str("usb_state", getUSBStateCached()).
+		Uint64("dropped_total", total).
+		Msgf("dropping HID reports, gadget not ready: %s", usbFingerprintText())
+}
+
+// noteHidWriteError records a report the endpoint refused. The first failure of a
+// burst is logged with the state that produced it; the rest only bump the counter.
+func noteHidWriteError(device string, err error) {
+	total := usbWriteErrCount.Add(1)
+	now := time.Now().UnixNano()
+	last := usbWriteErrLast.Load()
+	if now-last < int64(usbLogWindow) || !usbWriteErrLast.CompareAndSwap(last, now) {
+		return
+	}
+	usbLogger.Warn().
+		Err(err).
+		Str("device", device).
+		Str("usb_state", getUSBStateCached()).
+		Uint64("failed_total", total).
+		Msgf("HID report write failed: %s", usbFingerprintText())
+}
+
+// startUsbHeartbeat emits the USB fingerprint every 30s at debug level, so a
+// capture taken while the console is being watched shows the state before a
+// failure as well as after it. Enable it with the usb subsystem log level.
+func startUsbHeartbeat() {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				usbLogger.Debug().Msgf("USB heartbeat: %s dropped=%d write_failed=%d", usbFingerprintText(), usbDropCount.Load(), usbWriteErrCount.Load())
+			case <-appCtx.Done():
+				return
+			}
+		}
+	}()
+}
+
 // rpcHidReport runs a HID write, skipping it while the gadget is detached and
-// swallowing the transient errors produced by detach/rebind.
-func rpcHidReport(fn func() error) error {
+// swallowing the transient errors produced by detach/rebind. device names the
+// HID function for the diagnostics, so a dropped report is attributable.
+func rpcHidReport(device string, fn func() error) error {
 	if !usbReadyForHidReports() {
+		noteHidReportDropped(device)
 		return nil
 	}
 
@@ -343,6 +470,7 @@ func rpcHidReport(fn func() error) error {
 		if usbgadget.IsHIDTemporarilyUnavailableError(err) {
 			return nil
 		}
+		noteHidWriteError(device, err)
 		return err
 	}
 
@@ -353,30 +481,46 @@ func rpcHidReport(fn func() error) error {
 }
 
 func rpcKeyboardReport(modifier uint8, keys []uint8) error {
-	return rpcHidReport(func() error { return gadget.KeyboardReport(modifier, keys) })
+	return rpcHidReport("keyboard", func() error { return gadget.KeyboardReport(modifier, keys) })
 }
 
 func rpcKeypressReport(key uint8, press bool) error {
-	return rpcHidReport(func() error { return gadget.KeypressReport(key, press) })
+	return rpcHidReport("keyboard", func() error { return gadget.KeypressReport(key, press) })
 }
 
 func rpcKeypressKeepAlive() error {
-	return rpcHidReport(func() error { return gadget.KeypressKeepAlive() })
+	return rpcHidReport("keyboard", func() error { return gadget.KeypressKeepAlive() })
 }
 
 func rpcAbsMouseReport(x, y int, buttons uint8) error {
-	return rpcHidReport(func() error { return gadget.AbsMouseReport(x, y, buttons) })
+	return rpcHidReport("absolute_mouse", func() error { return gadget.AbsMouseReport(x, y, buttons) })
+}
+
+// rpcPenReport drives the pen collection of the pen/touch HID function. tip is a
+// left click, barrel a right click, and inRange keeps the host tracking the
+// position as a hover instead of ending the stroke.
+func rpcPenReport(x, y int, tip, barrel, inRange bool, pressure uint8) error {
+	return rpcHidReport("pen_touch", func() error {
+		return gadget.PenReport(x, y, tip, barrel, inRange, pressure)
+	})
+}
+
+// rpcTouchReport drives the touch screen collection of the pen/touch HID function.
+// The contacts are the complete set of fingers currently down, so an empty slice
+// releases everything.
+func rpcTouchReport(contacts []usbgadget.TouchContact) error {
+	return rpcHidReport("pen_touch", func() error { return gadget.TouchReport(contacts) })
 }
 
 func rpcRelMouseReport(dx, dy int8, buttons uint8) error {
-	return rpcHidReport(func() error { return gadget.RelMouseReport(dx, dy, buttons, 0) })
+	return rpcHidReport("relative_mouse", func() error { return gadget.RelMouseReport(dx, dy, buttons, 0) })
 }
 
 // rpcWheelReport sends a wheel report on whichever mouse function the gadget
 // actually enabled, so the host never receives a report for a missing device.
 // wheelY scrolls vertically, wheelX horizontally.
 func rpcWheelReport(wheelY int8, wheelX int8) error {
-	return rpcHidReport(func() error {
+	return rpcHidReport("wheel", func() error {
 		if gadget.HasAbsoluteMouse() {
 			return gadget.AbsMouseWheelReport(wheelY, wheelX)
 		}
@@ -459,6 +603,11 @@ func checkUSBState() {
 	}
 
 	usbLogger.Info().Str("from", prevState).Str("to", newState).Msg("USB state changed")
+	if newState != usbgadget.USBStateConfigured {
+		// This is the moment the host stops seeing a usable device. The fingerprint
+		// is the only record left once the automatic rebuild has run.
+		usbLogger.Warn().Msgf("USB left the configured state: %s", usbFingerprintText())
+	}
 	requestDisplayUpdate(true)
 	triggerUSBStateUpdate()
 }
@@ -476,6 +625,7 @@ func rpcSendUsbWakeupSignal() error {
 // failure without restarting the device.
 func rpcReinitializeUsbGadgetManually() error {
 	resetAutoReinitBrake()
+	usbLogger.Info().Msgf("manual USB reinit requested: %s", usbFingerprintText())
 	// A manual rebuild is the operator's way out of a wedged state, so it must not
 	// be held back by the marker of a rebuild that never returned. Taking the lock
 	// over immediately beats asking the user to pick a better moment: by then the
@@ -532,6 +682,10 @@ func rpcReinitializeUsbGadget() error {
 		return fmt.Errorf("USB gadget not initialized")
 	}
 
+	// Log the state before teardown: after this point the old gadget is gone and
+	// nothing can be recovered from it.
+	usbLogger.Info().Msgf("USB state before reinit: %s", usbFingerprintText())
+
 	mediaState, _ := rpcGetVirtualMediaState()
 	if mediaState != nil && (mediaState.Filename != "" || mediaState.URL != "") {
 		usbLogger.Info().Interface("mediaState", mediaState).Msg("virtual media mounted, unmounting before USB reinit")
@@ -578,5 +732,6 @@ func rpcReinitializeUsbGadget() error {
 	initAutoMountImage()
 
 	usbLogger.Info().Msg("USB gadget reinitialized successfully")
+	usbLogger.Info().Msgf("USB state after reinit: %s", usbFingerprintText())
 	return nil
 }

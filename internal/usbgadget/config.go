@@ -64,6 +64,8 @@ var defaultGadgetConfig = map[string]gadgetConfigItem{
 	"absolute_mouse": absoluteMouseConfig,
 	// relative mouse HID
 	"relative_mouse": relativeMouseConfig,
+	// pen and touch screen HID
+	"pen_touch": penTouchConfig,
 	// mass storage
 	"mass_storage_base": massStorageBaseConfig,
 	"mass_storage_lun0": massStorageLun0Config,
@@ -92,6 +94,8 @@ func (u *UsbGadget) isGadgetConfigItemEnabled(itemKey string) bool {
 		return u.enabledDevices.AbsoluteMouse
 	case "relative_mouse":
 		return u.enabledDevices.RelativeMouse
+	case "pen_touch":
+		return u.enabledDevices.AbsoluteMouse
 	case "keyboard":
 		return u.enabledDevices.Keyboard
 	case "mass_storage_base":
@@ -110,7 +114,10 @@ func (u *UsbGadget) isGadgetConfigItemEnabled(itemKey string) bool {
 // hidFunctionOrder lists the HID functions in creation order. The kernel numbers
 // /dev/hidgN nodes by that order, not by the hid.usbN suffix in the function name,
 // so a disabled keyboard shifts both mouse nodes down by one.
-var hidFunctionOrder = []string{"keyboard", "absolute_mouse", "relative_mouse"}
+//
+// pen_touch stays last: appending it keeps the existing keyboard/absolute_mouse/
+// relative_mouse at hidg0/hidg1/hidg2 when all of them are enabled.
+var hidFunctionOrder = []string{"keyboard", "absolute_mouse", "relative_mouse", "pen_touch"}
 
 // HidgNodePath returns the /dev/hidgN node backing one HID function. These paths
 // must not be hardcoded: as soon as a function is switched off the nodes are

@@ -10,6 +10,8 @@ export const HID_RPC_MESSAGE_TYPES = {
   MouseReport: 0x06,
   KeyboardMacroReport: 0x07,
   CancelKeyboardMacroReport: 0x08,
+  PenReport: 0x0a,
+  TouchReport: 0x0b,
   KeyboardLedState: 0x32,
   KeysDownState: 0x33,
   KeyboardMacroState: 0x34,
@@ -392,6 +394,107 @@ export class MouseReportMessage extends RpcMessage {
       fromInt8ToUint8(this.dy),
       this.buttons,
     ]);
+  }
+}
+
+// Flag bits of the pen collection in the absolute HID function descriptor.
+// Keep in sync with internal/usbgadget/hid_mouse_absolute.go and
+// internal/hidrpc/message.go.
+export const PEN_FLAGS = {
+  tip: 1 << 0,
+  barrel: 1 << 1,
+  inRange: 1 << 2,
+};
+
+// Flag bits of one finger of the touch screen collection.
+export const TOUCH_FLAGS = {
+  tip: 1 << 0,
+  inRange: 1 << 1,
+};
+
+// Number of finger collections in the touch screen descriptor. A host ignores
+// contacts beyond this, so the client must never report more.
+export const MAX_TOUCH_CONTACTS = 10;
+
+// PenReportMessage drives the pen collection: an absolute position, the switch
+// flags and the tip pressure. It is what hosts that ignore an absolute mouse
+// (Android) do follow.
+export class PenReportMessage extends RpcMessage {
+  x: number;
+  y: number;
+  flags: number;
+  pressure: number;
+
+  constructor(x: number, y: number, flags: number, pressure: number) {
+    super(HID_RPC_MESSAGE_TYPES.PenReport);
+    this.x = x;
+    this.y = y;
+    this.flags = flags & 0xff;
+    this.pressure = pressure & 0xff;
+  }
+
+  marshal(): Uint8Array {
+    return new Uint8Array([
+      this.messageType,
+      ...fromInt32toUint8(this.x),
+      ...fromInt32toUint8(this.y),
+      this.flags,
+      this.pressure,
+    ]);
+  }
+}
+
+export interface TouchContactReport {
+  id: number;
+  x: number;
+  y: number;
+  down: boolean;
+  /** Keep the slot in range while the tip is up, which announces a clean lift. */
+  inRange?: boolean;
+}
+
+// TouchReportMessage carries the complete set of fingers currently on the
+// surface. Contacts left out of the list are released by the host.
+export class TouchReportMessage extends RpcMessage {
+  contacts: TouchContactReport[];
+
+  constructor(contacts: TouchContactReport[]) {
+    super(HID_RPC_MESSAGE_TYPES.TouchReport);
+    if (contacts.length > MAX_TOUCH_CONTACTS) {
+      throw new Error(`Too many touch contacts: ${contacts.length}`);
+    }
+
+    this.contacts = contacts;
+  }
+
+  marshal(): Uint8Array {
+    const data = new Uint8Array(2 + this.contacts.length * 10);
+    data[0] = this.messageType;
+    data[1] = this.contacts.length;
+
+    let offset = 2;
+    for (const contact of this.contacts) {
+      if (contact.id < 0 || contact.id > MAX_TOUCH_CONTACTS - 1) {
+        throw new Error(`Contact ID ${contact.id} is not within the contact range`);
+      }
+
+      // A lifted contact still has to be reported once with its tip up but in
+      // range: dropping tip and range in the same report leaves hosts such as
+      // Android with a finger they never see released.
+      const flags = (contact.down ? TOUCH_FLAGS.tip | TOUCH_FLAGS.inRange : contact.inRange ? TOUCH_FLAGS.inRange : 0);
+      data.set(
+        new Uint8Array([
+          contact.id,
+          ...fromInt32toUint8(contact.x),
+          ...fromInt32toUint8(contact.y),
+          flags,
+        ]),
+        offset,
+      );
+      offset += 10;
+    }
+
+    return data;
   }
 }
 

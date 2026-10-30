@@ -56,6 +56,17 @@ func (m *Message) String() string {
 			return fmt.Sprintf("MouseReport{Malformed: %v}", m.d)
 		}
 		return fmt.Sprintf("MouseReport{DX: %d, DY: %d, Button: %d}", m.d[0], m.d[1], m.d[2])
+	case TypePenReport:
+		if len(m.d) < 10 {
+			return fmt.Sprintf("PenReport{Malformed: %v}", m.d)
+		}
+		return fmt.Sprintf("PenReport{X: %d, Y: %d, Flags: %d, Pressure: %d}",
+			toInt(m.d[0:4]), toInt(m.d[4:8]), m.d[8], m.d[9])
+	case TypeTouchReport:
+		if len(m.d) < 1 {
+			return fmt.Sprintf("TouchReport{Malformed: %v}", m.d)
+		}
+		return fmt.Sprintf("TouchReport{ContactCount: %d}", m.d[0])
 	case TypeKeypressKeepAliveReport:
 		return "KeypressKeepAliveReport"
 	case TypeKeyboardMacroReport:
@@ -211,6 +222,102 @@ func (m *Message) MouseReport() (MouseReport, error) {
 		DY:     int8(m.d[1]),
 		Button: uint8(m.d[2]),
 	}, nil
+}
+
+// Pen report flag bits, matching the pen collection descriptor in
+// internal/usbgadget/hid_mouse_absolute.go.
+const (
+	PenFlagTip     uint8 = 0x01
+	PenFlagBarrel  uint8 = 0x02
+	PenFlagInRange uint8 = 0x04
+
+	TouchFlagTip     uint8 = 0x01
+	TouchFlagInRange uint8 = 0x02
+)
+
+// MaxTouchContacts is the number of finger collections the touch screen reports.
+const MaxTouchContacts = 10
+
+// PenReport is one stylus report: an absolute position plus its switches.
+type PenReport struct {
+	X        int
+	Y        int
+	Flags    uint8
+	Pressure uint8
+}
+
+func (r PenReport) IsTip() bool     { return r.Flags&PenFlagTip != 0 }
+func (r PenReport) IsBarrel() bool  { return r.Flags&PenFlagBarrel != 0 }
+func (r PenReport) IsInRange() bool { return r.Flags&PenFlagInRange != 0 }
+
+// PenReport returns the pen report from the message. The payload is the position
+// as two big-endian int32s, the flag byte and the tip pressure.
+func (m *Message) PenReport() (PenReport, error) {
+	if m.t != TypePenReport {
+		return PenReport{}, fmt.Errorf("invalid message type: %d", m.t)
+	}
+	if len(m.d) != 10 {
+		return PenReport{}, fmt.Errorf("invalid pen payload length: %d", len(m.d))
+	}
+
+	return PenReport{
+		X:        toInt(m.d[0:4]),
+		Y:        toInt(m.d[4:8]),
+		Flags:    m.d[8],
+		Pressure: m.d[9],
+	}, nil
+}
+
+// TouchContact is one finger of a touch screen report.
+type TouchContact struct {
+	ID    uint8
+	X     int
+	Y     int
+	Flags uint8
+}
+
+func (c TouchContact) IsDown() bool { return c.Flags&TouchFlagTip != 0 }
+
+// IsInRange reports whether the host should keep following the contact's position
+// even though the tip is up; a lift is announced as tip=0, inRange=1.
+func (c TouchContact) IsInRange() bool { return c.Flags&TouchFlagInRange != 0 }
+
+// TouchReport is the set of fingers currently on the surface.
+type TouchReport struct {
+	Contacts []TouchContact
+}
+
+// TouchReport returns the touch report from the message. The payload is the
+// contact count followed by that many contacts, each a contact ID, the position
+// as two big-endian int32s and the flag byte.
+func (m *Message) TouchReport() (TouchReport, error) {
+	if m.t != TypeTouchReport {
+		return TouchReport{}, fmt.Errorf("invalid message type: %d", m.t)
+	}
+	if len(m.d) < 1 {
+		return TouchReport{}, fmt.Errorf("invalid touch payload length: %d", len(m.d))
+	}
+
+	count := int(m.d[0])
+	if count > MaxTouchContacts {
+		return TouchReport{}, fmt.Errorf("too many touch contacts: %d", count)
+	}
+	if len(m.d) != 1+count*10 {
+		return TouchReport{}, fmt.Errorf("invalid touch payload length: %d for %d contacts", len(m.d), count)
+	}
+
+	contacts := make([]TouchContact, 0, count)
+	for i := 0; i < count; i++ {
+		offset := 1 + i*10
+		contacts = append(contacts, TouchContact{
+			ID:    m.d[offset],
+			X:     toInt(m.d[offset+1 : offset+5]),
+			Y:     toInt(m.d[offset+5 : offset+9]),
+			Flags: m.d[offset+9],
+		})
+	}
+
+	return TouchReport{Contacts: contacts}, nil
 }
 
 type KeyboardMacroState struct {
