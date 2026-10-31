@@ -69,30 +69,50 @@ func (u *UsbGadget) withHIDRebind(rebind func() error) error {
 	return rebind()
 }
 
-// GetUsbState returns the current state of the USB gadget
-func (u *UsbGadget) GetUsbState(enhancedDetection bool) (state string) {
-	if enhancedDetection {
-		discFile := "/sys/devices/platform/ff3e0000.usb2-phy/disc"
-		discBytes, err := os.ReadFile(discFile)
-		if err == nil {
-			discState := strings.TrimSpace(string(discBytes))
-			if discState == "DISCONNECTED" {
-				return USBStateNotAttached
-			}
-		}
-	}
+// usb2PhyDiscFile is the RV1106 usb2 phy disconnect flag. It reports link level
+// disconnects, but it is not a reliable source for the gadget state: it has been
+// observed reading DISCONNECTED while the host had already CONFIGURED the device.
+const usb2PhyDiscFile = "/sys/devices/platform/ff3e0000.usb2-phy/disc"
 
+// GetUsbState returns the current state of the USB gadget.
+//
+// The kernel's udc state is authoritative. The phy "disc" flag is only consulted
+// when the kernel reports nothing useful, because using it first silently muted
+// the whole input path: the host had CONFIGURED the gadget, every /dev/hidgN node
+// existed, and the flag still said DISCONNECTED - so the app believed the device
+// was unplugged and discarded every HID report until a reinit re-synced the phy.
+func (u *UsbGadget) GetUsbState(enhancedDetection bool) (state string) {
 	stateFile := path.Join("/sys/class/udc", u.udc, "state")
 	stateBytes, err := os.ReadFile(stateFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return USBStateNotAttached
-		} else {
-			u.log.Trace().Err(err).Msg("failed to read usb state")
+	switch {
+	case err == nil:
+		state = strings.TrimSpace(string(stateBytes))
+		if state == "" {
+			// An empty read is as useless as a failed one, and returning it would
+			// claim the gadget is ready and skip the fallback below.
+			state = USBStateUnknown
 		}
-		return USBStateUnknown
+	case os.IsNotExist(err):
+		state = USBStateNotAttached
+	default:
+		u.log.Trace().Err(err).Msg("failed to read usb state")
+		state = USBStateUnknown
 	}
-	return strings.TrimSpace(string(stateBytes))
+
+	if !enhancedDetection || (state != USBStateNotAttached && state != USBStateUnknown) {
+		return state
+	}
+
+	// Nothing usable from the kernel: the phy flag at least separates "cable
+	// unplugged" from "host has not configured us yet".
+	discBytes, discErr := os.ReadFile(usb2PhyDiscFile)
+	if discErr != nil {
+		return state
+	}
+	if strings.TrimSpace(string(discBytes)) == "DISCONNECTED" {
+		return USBStateNotAttached
+	}
+	return state
 }
 
 // IsUDCBound checks if the UDC state is bound.

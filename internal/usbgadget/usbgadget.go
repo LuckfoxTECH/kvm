@@ -51,6 +51,10 @@ type UsbGadget struct {
 	kvmGadgetPath string
 	configC1Path  string
 
+	// initErr keeps the reason Init failed. Callers that report success used to
+	// discard it, so a gadget that never reached the host was announced as rebuilt.
+	initErr error
+
 	configMap    map[string]gadgetConfigItem
 	customConfig Config
 
@@ -159,10 +163,16 @@ func newUsbGadget(name string, configMap map[string]gadgetConfigItem, enabledDev
 		absMouseAccumulatedWheelY: 0,
 	}
 	if err := g.Init(); err != nil {
+		g.initErr = err
 		logger.Error().Err(err).Msg("failed to init USB gadget (will retry later)")
 	}
 
 	return g
+}
+
+// InitError reports why the gadget could not be built, or nil when it was built.
+func (u *UsbGadget) InitError() error {
+	return u.initErr
 }
 
 // HasKeyboard reports whether the keyboard HID function is part of the current

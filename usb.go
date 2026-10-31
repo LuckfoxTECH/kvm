@@ -731,6 +731,13 @@ func rpcReinitializeUsbGadget() error {
 	initSystemInfo()
 	initAutoMountImage()
 
+	// A rebuild that never reached the host must not be announced as a success:
+	// the gadget keeps the failure of its own Init and nothing else reports it.
+	if err := gadget.InitError(); err != nil {
+		usbLogger.Error().Err(err).Msg("USB gadget reinit failed: gadget was not rebuilt")
+		return fmt.Errorf("USB gadget reinit failed: %w", err)
+	}
+
 	usbLogger.Info().Msg("USB gadget reinitialized successfully")
 	usbLogger.Info().Msgf("USB state after reinit: %s", usbFingerprintText())
 	return nil
