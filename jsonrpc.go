@@ -590,6 +590,92 @@ func rpcSetCustomUpdateBaseURL(baseURL string) error {
 	return nil
 }
 
+// defaultMobileVirtualMouseLayout mirrors the web UI defaults: one centred row
+// of widgets that is easy to reach with a thumb.
+func defaultMobileVirtualMouseLayout() *MobileVirtualMouseConfig {
+	return &MobileVirtualMouseConfig{
+		// Off by default: the overlay is opt-in so it never covers the video
+		// before the user asks for it.
+		Enabled: false,
+		Speed:   1,
+		Widgets: map[string]MobileVirtualMouseWidget{
+			"joystick": {X: 0.169, Y: 0.452, Scale: 1, Opacity: 1, Enabled: true},
+			"left":     {X: 0.4, Y: 0.467, Scale: 1, Opacity: 1, Enabled: true},
+			"right":    {X: 0.559, Y: 0.467, Scale: 1, Opacity: 1, Enabled: true},
+			"wheel":    {X: 0.728, Y: 0.437, Scale: 1, Opacity: 1, Enabled: true},
+		},
+	}
+}
+
+func clampVirtualMouseValue(value, low, high float64) float64 {
+	if value < low {
+		return low
+	}
+	if value > high {
+		return high
+	}
+	return value
+}
+
+// sanitizeMobileVirtualMouseLayout keeps a client-supplied layout usable: every
+// known widget exists exactly once and stays reachable inside the overlay.
+func sanitizeMobileVirtualMouseLayout(input MobileVirtualMouseConfig) MobileVirtualMouseConfig {
+	defaults := defaultMobileVirtualMouseLayout()
+	out := MobileVirtualMouseConfig{
+		Enabled: input.Enabled,
+		Speed:   defaults.Speed,
+		Widgets: make(map[string]MobileVirtualMouseWidget, len(defaults.Widgets)),
+	}
+	if input.Speed > 0 {
+		out.Speed = clampVirtualMouseValue(input.Speed, 0.5, 8)
+	}
+	for key, fallback := range defaults.Widgets {
+		widget, ok := input.Widgets[key]
+		if !ok {
+			out.Widgets[key] = fallback
+			continue
+		}
+		sanitized := MobileVirtualMouseWidget{
+			X:       clampVirtualMouseValue(widget.X, 0, 1),
+			Y:       clampVirtualMouseValue(widget.Y, 0, 1),
+			Scale:   fallback.Scale,
+			Opacity: fallback.Opacity,
+			Enabled: widget.Enabled,
+		}
+		if widget.Scale > 0 {
+			sanitized.Scale = clampVirtualMouseValue(widget.Scale, 0.5, 2)
+		}
+		if widget.Opacity > 0 {
+			sanitized.Opacity = clampVirtualMouseValue(widget.Opacity, 0.2, 1)
+		}
+		out.Widgets[key] = sanitized
+	}
+	return out
+}
+
+func rpcGetMobileVirtualMouse() (*MobileVirtualMouseConfig, error) {
+	if config.MobileVirtualMouse == nil {
+		return defaultMobileVirtualMouseLayout(), nil
+	}
+	// The stored layout can come from a hand-edited config.json or an older build,
+	// so it is normalised on the way out as well as on the way in.
+	sanitized := sanitizeMobileVirtualMouseLayout(*config.MobileVirtualMouse)
+	return &sanitized, nil
+}
+
+func rpcSetMobileVirtualMouse(layout string) error {
+	var parsed MobileVirtualMouseConfig
+	if err := json.Unmarshal([]byte(layout), &parsed); err != nil {
+		return fmt.Errorf("invalid virtual mouse layout: %w", err)
+	}
+	sanitized := sanitizeMobileVirtualMouseLayout(parsed)
+	config.MobileVirtualMouse = &sanitized
+	if err := SaveConfig(); err != nil {
+		return fmt.Errorf("failed to save virtual mouse layout: %w", err)
+	}
+	return nil
+}
+
 func rpcGetUpdateDownloadProxy() (string, error) {
 	return config.UpdateDownloadProxy, nil
 }
@@ -2284,6 +2370,8 @@ var rpcHandlers = map[string]RPCHandler{
 	"setCustomUpdateBaseURL":   {Func: rpcSetCustomUpdateBaseURL, Params: []string{"baseURL"}},
 	"getUpdateDownloadProxy":   {Func: rpcGetUpdateDownloadProxy},
 	"setUpdateDownloadProxy":   {Func: rpcSetUpdateDownloadProxy, Params: []string{"proxy"}},
+	"getMobileVirtualMouse":    {Func: rpcGetMobileVirtualMouse},
+	"setMobileVirtualMouse":    {Func: rpcSetMobileVirtualMouse, Params: []string{"layout"}},
 	"getDevModeState":          {Func: rpcGetDevModeState},
 	"setDevModeState":          {Func: rpcSetDevModeState, Params: []string{"enabled"}},
 	"getSSHKeyState":           {Func: rpcGetSSHKeyState},

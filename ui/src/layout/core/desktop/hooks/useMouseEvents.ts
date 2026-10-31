@@ -6,8 +6,10 @@ import { usesAbsolutePosition } from "@/hooks/mouseMode";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
 import { useHidRpc } from "@/hooks/useHidRpc";
 import { useMouseStore, useSettingsStore, useVideoStore, useHidStore } from "@/hooks/stores";
+import { BUTTON_LEFT, BUTTON_RIGHT } from "@/utils/touchGesture";
 
 import { usePointerLock } from "./usePointerLock";
+import { useTouchGestures } from "./useTouchGestures";
 
 // Pen pressure while the tip switch is down. The pen collection cannot measure
 // pressure, so the value only has to say "real contact" to hosts that gate
@@ -65,7 +67,6 @@ export const useMouseEvents = (
   const mouseEnabled = useHidStore(
     state => state.usbEmulationEnabled && state.usbMouseEnabled,
   );
-  const touchDragActiveRef = useRef(false);
   const relMouseFrameRef = useRef<number | null>(null);
   const absMouseFrameRef = useRef<number | null>(null);
   const touchFrameRef = useRef<number | null>(null);
@@ -79,6 +80,10 @@ export const useMouseEvents = (
   // A lifted contact stays in the map just long enough to carry its release.
   const touchReleaseTimersRef = useRef<Map<number, number>>(new Map());
   const lastTouchChangeRef = useRef(0);
+
+  // One release report per two-finger gesture. Cleared once the pointers drop
+  // below two, so the next gesture releases again.
+  const multiTouchReleaseSentRef = useRef(false);
 
   const calcDelta = (pos: number) => {
     const sensitivity = settings.mouseSensitivity || 1.0;
@@ -138,8 +143,13 @@ export const useMouseEvents = (
       if (isReinitializingGadget) return;
       if (!mouseEnabled) return;
 
-      const tip = (buttons & 1) !== 0;
-      const barrel = (buttons & 2) !== 0;
+      // A pen reports its secondary button through the barrel switch, but a host
+      // only turns that into a context menu while the tip is on the surface: a
+      // barrel press in the air does nothing. The secondary click therefore goes
+      // out as tip plus barrel, which is the pen equivalent of a right button.
+      const rightClick = (buttons & BUTTON_RIGHT) !== 0;
+      const tip = (buttons & BUTTON_LEFT) !== 0 || rightClick;
+      const barrel = rightClick;
       // In Range keeps the cursor alive between clicks: without it the host ends
       // the stroke and drops the hover position.
       const flags =
@@ -328,6 +338,33 @@ export const useMouseEvents = (
     [videoElm, videoWidth, videoHeight],
   );
 
+  // Where a resolved touch gesture is delivered: the same absolute report the
+  // mouse uses, so calibration and letterboxing are applied exactly once.
+  const emitTouchPoint = useCallback(
+    (clientX: number, clientY: number, buttons: number) => {
+      const coords = mapToHidCoords(clientX, clientY);
+      if (!coords) return;
+      sendAbsMouseMovement(coords.x, coords.y, buttons | externalButtons);
+    },
+    [mapToHidCoords, sendAbsMouseMovement, externalButtons],
+  );
+
+  const touchGestures = useTouchGestures({ emit: emitTouchPoint, tapToClick: !disableTouchClick });
+
+  // The first finger reports its press before the second one lands, and the
+  // gesture that follows produces no release of its own. Touch screen mode is
+  // excluded: there two fingers are two fingers on the host.
+  const releaseForMultiTouchGesture = useCallback(() => {
+    if (settings.mouseMode === "touch-screen") return;
+    if (multiTouchReleaseSentRef.current) return;
+    multiTouchReleaseSentRef.current = true;
+    if (settings.mouseMode === "relative") {
+      sendRelMouseMovement(0, 0, 0);
+      return;
+    }
+    dispatchAbsMovement(lastPointerRef.current.x, lastPointerRef.current.y, externalButtons);
+  }, [settings.mouseMode, sendRelMouseMovement, dispatchAbsMovement, externalButtons]);
+
   const relMouseMoveHandler = useCallback(
     (e: MouseEvent) => {
       const pt = (e as unknown as PointerEvent).pointerType as unknown as string;
@@ -335,7 +372,12 @@ export const useMouseEvents = (
       if (pt === "touch") {
         if (touchZoom) {
             const touchCount = touchZoom.activeTouchPointers.current.size;
-            if (touchCount >= 2) return;
+            if (touchCount < 2) {
+              multiTouchReleaseSentRef.current = false;
+            } else {
+              releaseForMultiTouchGesture();
+              return;
+            }
             if (touchZoom.mobileScale > 1 && touchZoom.lastPanPoint.current) return;
         }
       }
@@ -354,7 +396,7 @@ export const useMouseEvents = (
 
       sendRelMouseMovement(e.movementX, e.movementY, buttons);
     },
-    [pointerLock.isPointerLockActive, pointerLock.isPointerLockPossible, queueRelMouseMovement, sendRelMouseMovement, settings.mouseMode, touchZoom],
+    [pointerLock.isPointerLockActive, pointerLock.isPointerLockPossible, queueRelMouseMovement, sendRelMouseMovement, settings.mouseMode, touchZoom, releaseForMultiTouchGesture],
   );
 
   // Absolute, pen and a single-finger drag: one handler for all absolute-position
@@ -364,13 +406,16 @@ export const useMouseEvents = (
       const pt = (e as unknown as PointerEvent).pointerType as unknown as string;
       const pointerEvent = e as unknown as PointerEvent;
       const eventType = pointerEvent.type;
-      if (pt === "touch") {
+      if (pt === "touch" && settings.mouseMode !== "touch-screen") {
         if (touchZoom) {
           const touchCount = touchZoom.activeTouchPointers.current.size;
-          if (touchCount >= 2) {
-            if (eventType === "pointerup" || eventType === "pointercancel") {
-              touchDragActiveRef.current = false;
-            }
+          if (touchCount < 2) {
+            multiTouchReleaseSentRef.current = false;
+          } else {
+            // The press went out with the first finger; hand the release over
+            // before the gesture takes the pointers away.
+            releaseForMultiTouchGesture();
+            touchGestures.reset();
             return;
           }
         }
@@ -382,24 +427,19 @@ export const useMouseEvents = (
 
       if (!usesAbsolutePosition(settings.mouseMode)) return;
 
+      if (pt === "touch" && settings.mouseMode !== "touch-screen") {
+        // Single-finger touch is arbitrated in useTouchGestures: dead zone,
+        // smoothing, long press and double tap all live there.
+        if (eventType === "pointerdown") touchGestures.handleDown(pointerEvent);
+        else if (eventType === "pointermove") touchGestures.handleMove(pointerEvent);
+        else touchGestures.handleUp(pointerEvent);
+        return;
+      }
+
       const coords = mapToHidCoords(e.clientX, e.clientY);
       if (!coords) return;
 
-      let buttons = e.buttons;
-
-      if (pt === "touch") {
-        if (eventType === "pointerdown") {
-          touchDragActiveRef.current = !disableTouchClick;
-        }
-        if (eventType === "pointerup" || eventType === "pointercancel") {
-          buttons = 0;
-          touchDragActiveRef.current = false;
-        } else {
-          buttons = touchDragActiveRef.current ? 1 : 0;
-        }
-      }
-
-      buttons |= externalButtons;
+      const buttons = e.buttons | externalButtons;
 
       if (eventType === "pointermove") {
         queueAbsMouseMovement(coords.x, coords.y, buttons);
@@ -408,7 +448,7 @@ export const useMouseEvents = (
 
       dispatchAbsMovement(coords.x, coords.y, buttons);
     },
-    [settings.mouseMode, mapToHidCoords, queueAbsMouseMovement, dispatchAbsMovement, touchZoom, disableTouchClick, externalButtons, videoElm],
+    [settings.mouseMode, mapToHidCoords, queueAbsMouseMovement, dispatchAbsMovement, touchZoom, touchGestures, externalButtons, videoElm, releaseForMultiTouchGesture],
   );
 
   // Touch screen mode: every pointer on the video becomes a finger of its own, so
@@ -524,6 +564,32 @@ export const useMouseEvents = (
     ],
   );
 
+  // One entry point for every wheel report: the physical wheel, the virtual
+  // mouse wheel buttons and two-finger scrolling all pass the same gates and the
+  // same invert setting, so they cannot drift apart.
+  const sendWheelReport = useCallback(
+    (wheelY: number, wheelX: number) => {
+      if (isReinitializingGadget) return;
+      if (!mouseEnabled) return;
+      if (settings.scrollThrottling && Date.now() < wheelThrottleUntilRef.current) return;
+
+      const invertedY = settings.invertScroll ? -wheelY : wheelY;
+      const clampedY = Math.max(-127, Math.min(127, invertedY));
+      // Horizontal scrolling ignores invertScroll on purpose: the setting is
+      // about the wheel, and a trackpad swipe already carries its own direction.
+      const clampedX = Math.max(-127, Math.min(127, wheelX));
+
+      if (clampedY === 0 && clampedX === 0) return;
+
+      sendNotification("wheelReport", { wheelY: clampedY, wheelX: clampedX });
+
+      if (settings.scrollThrottling) {
+        wheelThrottleUntilRef.current = Date.now() + settings.scrollThrottling;
+      }
+    },
+    [sendNotification, settings, isReinitializingGadget, mouseEnabled],
+  );
+
   const mouseWheelHandler = useCallback(
     (e: WheelEvent) => {
       // Don't send wheel events while reinitializing gadget
@@ -542,10 +608,6 @@ export const useMouseEvents = (
         if (!physicalCtrl) return;
       }
 
-      if (settings.scrollThrottling && Date.now() < wheelThrottleUntilRef.current) {
-        return;
-      }
-
       // Keep the magnitude on both axes: a trackpad flick carries tens of pixels per
       // event, and collapsing the horizontal one to its sign made panning crawl
       // while the vertical axis accelerated.
@@ -554,23 +616,11 @@ export const useMouseEvents = (
       const scrollValue = isAccel ? e.deltaY / 100 : Math.sign(e.deltaY);
       const scrollValueX = isAccelX ? e.deltaX / 100 : Math.sign(e.deltaX);
 
-      const clampedScrollValue = Math.max(-127, Math.min(127, scrollValue));
-      const clampedScrollValueX = Math.max(-127, Math.min(127, scrollValueX));
-      const wheelY = settings.invertScroll ? clampedScrollValue : -clampedScrollValue;
-
-      // Horizontal scrolling ignores invertScroll on purpose: the setting is
-      // about the wheel, and a trackpad swipe already carries its own direction.
-      const wheelX = -clampedScrollValueX;
-
-      if (wheelY === 0 && wheelX === 0) return;
-
-      sendNotification("wheelReport", { wheelY, wheelX });
-
-      if (settings.scrollThrottling) {
-        wheelThrottleUntilRef.current = Date.now() + settings.scrollThrottling;
-      }
+      // The wheel turns "delta down" into "wheel up"; sendWheelReport owns the
+      // invert setting, so the value handed over here is the natural direction.
+      sendWheelReport(-scrollValue, -scrollValueX);
     },
-    [sendNotification, settings, isReinitializingGadget, mouseEnabled],
+    [sendWheelReport, settings, isReinitializingGadget, mouseEnabled],
   );
 
   // Release whatever the current mode has pressed, so switching modes, losing the
@@ -591,7 +641,9 @@ export const useMouseEvents = (
       return;
     }
 
-    sendAbsMovement(0, 0, 0);
+    // Re-report the pointer where it already is. Parking at (0,0) would drag the
+    // host cursor into a corner every time the tab loses focus.
+    sendAbsMovement(lastPointerRef.current.x, lastPointerRef.current.y, 0);
   }, [
     settings.mouseMode,
     rpcHidReady,
@@ -716,5 +768,6 @@ export const useMouseEvents = (
     setupMouseEvents,
     sendVirtualRelativeMovement,
     sendAbsMouseMovement,
+    sendWheelReport,
   };
 };

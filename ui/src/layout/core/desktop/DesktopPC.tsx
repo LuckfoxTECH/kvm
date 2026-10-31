@@ -59,7 +59,11 @@ export default function PCDesktop({ isFullscreen }: { isFullscreen?: number }) {
   const videoStream = useVideoStream(videoElm as React.RefObject<HTMLVideoElement>, audioElm as React.RefObject<HTMLAudioElement>);
   const pointerLock = usePointerLock(videoElm as React.RefObject<HTMLVideoElement>);
   useFullscreen(videoElm as React.RefObject<HTMLVideoElement>, pointerLock, isFullscreen);
-  const touchZoom = useTouchZoom(zoomContainerRef as React.RefObject<HTMLDivElement>);
+  const touchZoom = useTouchZoom(
+    zoomContainerRef as React.RefObject<HTMLDivElement>,
+    true,
+    undefined,
+  );
   const { handleGlobalPaste } = usePasteHandler(pasteCaptureRef as React.RefObject<HTMLTextAreaElement>);
 
   const keyboardEvents = useKeyboardEvents(pasteCaptureRef as React.RefObject<HTMLTextAreaElement>, isReinitializingGadget);

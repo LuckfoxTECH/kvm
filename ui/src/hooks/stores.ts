@@ -514,6 +514,11 @@ interface SettingsState {
 
   forceHttp: boolean;
   setForceHttp: (enabled: boolean) => void;
+
+  // Mobile gesture toggle. Off means Zoom Lock: two fingers scroll the host
+  // instead of pinching the view scale.
+  touchGestureEnabled: boolean;
+  setTouchGestureEnabled: (enabled: boolean) => void;
 }
 
 export const useSettingsStore = create(
@@ -611,6 +616,8 @@ export const useSettingsStore = create(
 
       forceHttp: false,
       setForceHttp: enabled => set({ forceHttp: enabled }),
+      touchGestureEnabled: true,
+      setTouchGestureEnabled: enabled => set({ touchGestureEnabled: enabled }),
     }),
     {
       name: "settings",
@@ -622,6 +629,9 @@ export const useSettingsStore = create(
         merged.keyboardLedSync = merged.keyboardLedSync === "browser" ? "browser" : "host";
         // A profile written by an older build has no fullscreenMode at all.
         merged.fullscreenMode = merged.fullscreenMode === "video" ? "video" : "page";
+        // The gesture toggle is a setup-once choice, so it belongs to the browser
+        // profile next to the other view preferences.
+        merged.touchGestureEnabled = merged.touchGestureEnabled !== false;
         return merged;
       },
     },

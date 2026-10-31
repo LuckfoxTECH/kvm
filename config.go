@@ -153,6 +153,26 @@ type Config struct {
 	SerialStopBits             string                 `json:"serial_stop_bits,omitempty"`    // "1", "1.5", "2"
 	SerialParity               string                 `json:"serial_parity,omitempty"`       // "none", "odd", "even", "mark", "space"
 	SerialPortEnabled          bool                   `json:"serial_port_enabled,omitempty"` // user intent: keep the serial port open across reloads and reboots
+	// MobileVirtualMouse holds the mobile virtual mouse overlay layout so the
+	// widget positions survive reloads and are shared by every browser.
+	MobileVirtualMouse *MobileVirtualMouseConfig `json:"mobile_virtual_mouse,omitempty"`
+}
+
+// MobileVirtualMouseConfig is the persisted virtual mouse overlay layout.
+type MobileVirtualMouseConfig struct {
+	Enabled bool    `json:"enabled"` // master switch: show the widgets at all
+	Speed   float64 `json:"speed"`   // joystick speed multiplier
+	Widgets map[string]MobileVirtualMouseWidget `json:"widgets"`
+}
+
+// MobileVirtualMouseWidget is one widget's placement and appearance. Positions
+// are fractions of the overlay area so the layout survives any screen size.
+type MobileVirtualMouseWidget struct {
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Scale   float64 `json:"scale"`
+	Opacity float64 `json:"opacity"`
+	Enabled bool    `json:"enabled"`
 }
 
 type AutoMountImageConfig struct {
