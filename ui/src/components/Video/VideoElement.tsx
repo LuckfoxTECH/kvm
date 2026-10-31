@@ -2,6 +2,7 @@ import { forwardRef } from "react";
 import { isMobile } from 'react-device-detect';
 
 import { useHidStore } from "@/hooks/stores";
+import { isKeyboardTapSuppressed } from "@/utils/keyboardTapGuard";
 
 interface VideoElementProps {
   onPlaying: () => void;
@@ -16,6 +17,7 @@ export const VideoElement = forwardRef<HTMLVideoElement, VideoElementProps>(
     const allowTapToOpenVirtualKeyboard = useHidStore(state => state.allowTapToOpenVirtualKeyboard);
 
     const handleClick = () => {
+      if (isKeyboardTapSuppressed()) return;
       if (isMobile && allowTapToOpenVirtualKeyboard && !isVirtualKeyboardEnabled) {
         setVirtualKeyboardEnabled(true);
       }

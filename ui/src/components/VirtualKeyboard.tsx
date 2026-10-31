@@ -477,6 +477,18 @@ function KeyboardWrapper() {
                           .hg-button {
                             transition: background-color 0.02s ease-in-out;
                           }
+                          /* The Back key is the hide button on touch layouts, so it
+                             has to stand apart from the letter keys it sits next to. */
+                          .simple-keyboard-topcontrol .hg-button.hg-hide-key {
+                            border-color: rgba(59, 130, 246, 0.45) !important;
+                            background-color: rgba(59, 130, 246, 0.1) !important;
+                            color: rgba(37, 99, 235, 1) !important;
+                          }
+                          html.dark .simple-keyboard-topcontrol .hg-button.hg-hide-key {
+                            border-color: rgba(96, 165, 250, 0.55) !important;
+                            background-color: rgba(59, 130, 246, 0.16) !important;
+                            color: rgba(219, 234, 254, 1) !important;
+                          }
                         `}
                       </style>
 
@@ -486,7 +498,8 @@ function KeyboardWrapper() {
                         buttonTheme={[
                           ...(stickyModifiers.length ? [{ class: "hg-mod-active", buttons: stickyModifiers.join(" ") }] : []),
                           ...(hostModifierButtons ? [{ class: "hg-mod-active", buttons: hostModifierButtons }] : []),
-                          ...(modifierLockMode && modifierLockButtons ? [{ class: "modifier-locked", buttons: modifierLockButtons }] : [])
+                          ...(modifierLockMode && modifierLockButtons ? [{ class: "modifier-locked", buttons: modifierLockButtons }] : []),
+                          { class: "hg-hide-key", buttons: "Back" }
                         ]}
                         onKeyPress={(key: string) => {
                           if (key === "Back") {

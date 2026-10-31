@@ -13,6 +13,7 @@ import { isMobile } from "react-device-detect";
 
 import notifications from "@/notifications";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
+import { isKeyboardTapSuppressed } from "@/utils/keyboardTapGuard";
 import Card, { GridCard } from "@components/Card";
 import LoadingSpinner from "@components/LoadingSpinner";
 import { Button } from "@components/Button";
@@ -281,6 +282,7 @@ export function HDMIErrorOverlay({ show, hdmiState }: HDMIErrorOverlayProps) {
   const allowTapToOpenVirtualKeyboard = useHidStore(state => state.allowTapToOpenVirtualKeyboard);
 
   const handleClick = () => {
+    if (isKeyboardTapSuppressed()) return;
     if (isMobile && allowTapToOpenVirtualKeyboard && !isVirtualKeyboardEnabled) {
       setVirtualKeyboardEnabled(true);
     }

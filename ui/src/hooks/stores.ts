@@ -7,6 +7,7 @@ import {
   MAX_KEYS_PER_STEP,
 } from "@/constants/macros";
 import type { KeyboardFormFactor } from "@/keyboardFormFactor";
+import { suppressKeyboardTap } from "@/utils/keyboardTapGuard";
 
 // Define the JsonRpc types for better type checking
 interface JsonRpcResponse {
@@ -790,6 +791,28 @@ export const useSerialStore = create<SerialState>(set => ({
   setIsConnected: connected => set({ isConnected: connected }),
 }));
 
+// Tapping the video to open the on-screen keyboard is a browser preference, not
+// device state: it belongs in localStorage so a reload keeps the choice without
+// writing anything to the device configuration.
+const TAP_KEYBOARD_STORAGE_KEY = "allow-tap-to-open-virtual-keyboard";
+
+function readStoredBoolean(key: string, fallback: boolean): boolean {
+  try {
+    const raw = window.localStorage.getItem(key);
+    return raw === null ? fallback : raw === "true";
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredBoolean(key: string, value: boolean) {
+  try {
+    window.localStorage.setItem(key, value ? "true" : "false");
+  } catch {
+    // Storage is unavailable in private mode; the toggle still works in memory.
+  }
+}
+
 export const useHidStore = create<HidState>((set, get) => ({
   activeKeys: [],
   activeModifiers: [],
@@ -847,9 +870,16 @@ export const useHidStore = create<HidState>((set, get) => ({
     }),
 
   isVirtualKeyboardEnabled: false,
-  setVirtualKeyboardEnabled: enabled => set({ isVirtualKeyboardEnabled: enabled }),
-  allowTapToOpenVirtualKeyboard: true,
-  setAllowTapToOpenVirtualKeyboard: enabled => set({ allowTapToOpenVirtualKeyboard: enabled }),
+  setVirtualKeyboardEnabled: enabled => {
+    // Hiding the keyboard must not let the same tap reach the video and reopen it.
+    if (!enabled) suppressKeyboardTap();
+    set({ isVirtualKeyboardEnabled: enabled });
+  },
+  allowTapToOpenVirtualKeyboard: readStoredBoolean(TAP_KEYBOARD_STORAGE_KEY, true),
+  setAllowTapToOpenVirtualKeyboard: enabled => {
+    writeStoredBoolean(TAP_KEYBOARD_STORAGE_KEY, enabled);
+    set({ allowTapToOpenVirtualKeyboard: enabled });
+  },
 
   isPasteModeEnabled: false,
   setPasteModeEnabled: enabled => set({ isPasteModeEnabled: enabled }),
