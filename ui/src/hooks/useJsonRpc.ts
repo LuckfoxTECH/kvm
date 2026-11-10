@@ -71,7 +71,10 @@ export function useJsonRpc(onRequest?: (payload: JsonRpcRequest) => void) {
 
   const send = useCallback(
     (method: string, params: unknown, callback?: (resp: JsonRpcResponse) => void) => {
-      if (forceHttp) {
+      // The RPC data channel exists only while the WebRTC video session is up.
+      // Power and the other device calls still have to reach the KVM when the
+      // target PC is off, so use the HTTP API instead of dropping them.
+      if (forceHttp || !rpcDataChannel || rpcDataChannel.readyState !== "open") {
         if (httpSessionInvalidated) {
           requestCounter++;
           const payloadId = requestCounter;
@@ -136,7 +139,6 @@ export function useJsonRpc(onRequest?: (payload: JsonRpcRequest) => void) {
         return;
       }
 
-      if (rpcDataChannel?.readyState !== "open") return;
       requestCounter++;
       const payload = { jsonrpc: "2.0", method, params, id: requestCounter };
       // Store the callback if it exists
@@ -151,7 +153,7 @@ export function useJsonRpc(onRequest?: (payload: JsonRpcRequest) => void) {
     (method: string, params: unknown) => {
       const payload = { jsonrpc: "2.0", method, params };
 
-      if (forceHttp) {
+      if (forceHttp || !rpcDataChannel || rpcDataChannel.readyState !== "open") {
         fetch("/api/rpc", {
           method: "POST",
           headers: {
@@ -165,7 +167,6 @@ export function useJsonRpc(onRequest?: (payload: JsonRpcRequest) => void) {
         return;
       }
 
-      if (rpcDataChannel?.readyState !== "open") return;
       rpcDataChannel.send(JSON.stringify(payload));
     },
     [rpcDataChannel, forceHttp],

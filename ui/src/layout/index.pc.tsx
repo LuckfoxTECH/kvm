@@ -1024,8 +1024,13 @@ export default function PCHome() {
     const isDisconnected = peerConnectionState === "disconnected" && !forceHttp;
 
     const isOtherSession = location.pathname.includes("other-session");
+    // Match the mobile layout: a sidebar has to stay usable while video is down.
+    // This overlay is absolute and covers the sidebar, so the power panel opens
+    // behind the connection error unless the overlay is removed first.
+    const hasActiveSidebar = sidebarView !== null;
 
     if (isOtherSession) return null;
+    if (hasActiveSidebar) return null;
     if (peerConnectionState === "connected") return null;
     if (isDisconnected) {
       return <PeerConnectionDisconnectedOverlay show={true} />;
@@ -1044,11 +1049,13 @@ export default function PCHome() {
     return null;
   }, [
     connectionFailed,
+    forceHttp,
     loadingMessage,
     location.pathname,
     peerConnection,
     peerConnectionState,
     setupPeerConnection,
+    sidebarView,
   ]);
 
   const { isDark } = useTheme();
