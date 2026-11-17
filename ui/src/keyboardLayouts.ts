@@ -48,6 +48,7 @@ import { ja_JP } from "./keyboardLayouts/ja_JP";
 import { ja_JP_mac } from "./keyboardLayouts/ja_JP_mac";
 import { nb_NO } from "./keyboardLayouts/nb_NO";
 import { pl_PL } from "./keyboardLayouts/pl_PL";
+import { pt_BR } from "./keyboardLayouts/pt_BR";
 import { pt_PT } from "./keyboardLayouts/pt_PT";
 import { sv_SE } from "./keyboardLayouts/sv_SE";
 import { sl_SI } from "./keyboardLayouts/sl_SI";
@@ -70,6 +71,7 @@ export const keyboards: KeyboardLayout[] = [
   ja_JP_mac,
   nb_NO,
   pl_PL,
+  pt_BR,
   pt_PT,
   sv_SE,
   sl_SI,

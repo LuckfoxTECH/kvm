@@ -8,16 +8,17 @@
 // assuming one fixed row shape. Transforming the layout keeps the 20 language
 // layouts untouched.
 
-export type KeyboardFormFactor = "ANSI" | "ISO" | "JIS";
+export type KeyboardFormFactor = "ANSI" | "ISO" | "JIS" | "ABNT2";
 
 export const keyboardFormFactorOptions: { value: KeyboardFormFactor; label: string }[] = [
   { value: "ANSI", label: "ANSI (US)" },
   { value: "ISO", label: "ISO (Europe)" },
   { value: "JIS", label: "JIS (Japan)" },
+  { value: "ABNT2", label: "ABNT2 (Brasil)" },
 ];
 
 export function isKeyboardFormFactor(value: unknown): value is KeyboardFormFactor {
-  return value === "ANSI" || value === "ISO" || value === "JIS";
+  return value === "ANSI" || value === "ISO" || value === "JIS" || value === "ABNT2";
 }
 
 // Left of the Z row on ISO keyboards, absent on ANSI and JIS.
@@ -84,6 +85,8 @@ function insertBefore(row: string, anchor: string, keys: string[]) {
 
 function applyToRow(row: string, formFactor: KeyboardFormFactor) {
   if (formFactor === "JIS") return removeKeys(row, ISO_ONLY);
+  // ABNT2 is ISO plus the "/ ?" key (KeyRO) next to Right Shift.
+  if (formFactor === "ABNT2") return removeKeys(row, JIS_ONLY);
 
   // Dropping a JIS key never needs a stand-in: ANSI keeps its own backslash key
   // wherever the language layout put it, and ISO gains IntlBackslash below.
@@ -108,10 +111,13 @@ export function applyFormFactor(
   // ISO is ANSI plus the extra key left of Z; the right shift shrinks to make
   // room for it, which a uniform-width virtual keyboard cannot express, so the
   // key count is the only thing that changes here.
-  if (formFactor === "ISO") {
+  if (formFactor === "ISO" || formFactor === "ABNT2") {
     const zRow = out.findIndex(row => has(row, "KeyZ"));
     if (zRow !== -1 && !has(out[zRow], "IntlBackslash")) {
       out[zRow] = insertAfter(out[zRow], "ShiftLeft", wrap(ISO_ONLY));
+    }
+    if (formFactor === "ABNT2" && zRow !== -1 && !has(out[zRow], "KeyRO")) {
+      out[zRow] = insertAfter(out[zRow], "Slash", wrap(JIS_RO_KEYS));
     }
     return out;
   }

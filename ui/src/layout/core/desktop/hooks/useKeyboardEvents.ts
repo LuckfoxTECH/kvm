@@ -101,7 +101,13 @@ export const useKeyboardEvents = (
   }, [isolateBrowserShortcuts]);
 
   const handleModifierKeys = useCallback((e: KeyboardEvent, activeModifiers: number[]) => {
-    const { shiftKey, ctrlKey, altKey, metaKey } = e;
+    const { shiftKey, metaKey } = e;
+    // AltGr (ABNT2, ISO layouts) reaches the page as the AltGraph modifier; some
+    // browsers then report ctrlKey/altKey as false, which used to strip the
+    // ControlLeft+AltRight pair and turned AltGr+] into a plain "]".
+    const altGraph = e.getModifierState?.("AltGraph") ?? false;
+    const ctrlKey = e.ctrlKey || altGraph;
+    const altKey = e.altKey || altGraph;
     const filteredModifiers = activeModifiers.filter(Boolean);
 
     return filteredModifiers

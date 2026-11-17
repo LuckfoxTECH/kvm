@@ -42,7 +42,8 @@ function KeyboardWrapper() {
   // applyFormFactor row rewrite. It only needs the extra keys each form factor
   // brings: ISO adds IntlBackslash, JIS adds Yen/KeyRO and the IME toggles.
   const formFactorIsJIS = keyboardFormFactor === "JIS";
-  const formFactorIsISO = keyboardFormFactor === "ISO";
+  const formFactorIsISO = keyboardFormFactor === "ISO" || keyboardFormFactor === "ABNT2";
+  const formFactorHasRO = formFactorIsJIS || keyboardFormFactor === "ABNT2";
 
   const keyDisplayMap = useMemo(() => {
     // The layout's own map wins; the base map only fills in the keys a layout
@@ -735,11 +736,11 @@ function KeyboardWrapper() {
                                 layout={{
                                   default: [
 
-                                    `ShiftLeft${formFactorIsISO ? " IntlBackslash" : ""} KeyZ KeyX KeyC KeyV KeyB KeyN KeyM Backspace${formFactorIsJIS ? " KeyRO" : ""}`,
+                                    `ShiftLeft${formFactorIsISO ? " IntlBackslash" : ""} KeyZ KeyX KeyC KeyV KeyB KeyN KeyM Backspace${formFactorHasRO ? " KeyRO" : ""}`,
                                   ],
                                   shift: [
 
-                                    `ShiftLeft${formFactorIsISO ? " (IntlBackslash)" : ""} (KeyZ) (KeyX) (KeyC) (KeyV) (KeyB) (KeyN) (KeyM) Backspace${formFactorIsJIS ? " (KeyRO)" : ""}`,
+                                    `ShiftLeft${formFactorIsISO ? " (IntlBackslash)" : ""} (KeyZ) (KeyX) (KeyC) (KeyV) (KeyB) (KeyN) (KeyM) Backspace${formFactorHasRO ? " (KeyRO)" : ""}`,
                                   ],
                                 }}
 

@@ -118,6 +118,8 @@ var keyboardReportDescWide = []byte{
 // this table.
 var keyboardFormFactorReportDescs = map[string][]byte{
 	"JIS": keyboardReportDescWide,
+	// ABNT2 (Brazil) has the "/ ?" key next to Right Shift at usage 0x87 (International1).
+	"ABNT2": keyboardReportDescWide,
 }
 
 // KeyboardReportDescForFormFactor returns the HID report descriptor the physical
