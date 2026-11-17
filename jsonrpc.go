@@ -1599,7 +1599,7 @@ func rpcSetKeyboardLayout(layout string) error {
 // can mirror. They are separate from the language layout: the same language can
 // be typed on any of them, and the form factor only decides which extra keys
 // (IntlBackslash, yen/ro, IME keys) the keyboard shows.
-var keyboardFormFactors = map[string]bool{"ANSI": true, "ISO": true, "JIS": true}
+var keyboardFormFactors = map[string]bool{"ANSI": true, "ISO": true, "JIS": true, "ABNT2": true}
 
 func rpcGetKeyboardFormFactor() (string, error) {
 	// Configs written before this setting existed have an empty value; ANSI is
@@ -1612,7 +1612,7 @@ func rpcGetKeyboardFormFactor() (string, error) {
 
 func rpcSetKeyboardFormFactor(formFactor string) error {
 	if !keyboardFormFactors[formFactor] {
-		return fmt.Errorf("invalid keyboard form factor %q, expected ANSI, ISO or JIS", formFactor)
+		return fmt.Errorf("invalid keyboard form factor %q, expected ANSI, ISO, JIS or ABNT2", formFactor)
 	}
 	previous := config.KeyboardFormFactor
 	config.KeyboardFormFactor = formFactor
