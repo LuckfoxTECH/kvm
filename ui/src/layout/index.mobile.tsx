@@ -1038,7 +1038,8 @@ export default function MobileHome() {
 
     return null;
   }, [
-    connectionFailed,
+    hasConnectionFailed,
+    forceHttp,
     loadingMessage,
     location.pathname,
     peerConnection,

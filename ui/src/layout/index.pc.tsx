@@ -1044,6 +1044,7 @@ export default function PCHome() {
     return null;
   }, [
     connectionFailed,
+    forceHttp,
     loadingMessage,
     location.pathname,
     peerConnection,

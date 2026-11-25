@@ -13,6 +13,7 @@ import { isMobile } from "react-device-detect";
 
 import notifications from "@/notifications";
 import { useJsonRpc } from "@/hooks/useJsonRpc";
+import { useSettingsStore } from "@/hooks/stores";
 import { isKeyboardTapSuppressed } from "@/utils/keyboardTapGuard";
 import Card, { GridCard } from "@components/Card";
 import LoadingSpinner from "@components/LoadingSpinner";
@@ -118,9 +119,16 @@ interface ConnectionErrorOverlayProps {
 export function ConnectionFailedOverlay({
                                           show,
                                           setupPeerConnection,
-                                        }: ConnectionErrorOverlayProps)
+                                         }: ConnectionErrorOverlayProps)
 {
   const { $at } = useReactAt();
+  const forceHttp = useSettingsStore(state => state.forceHttp);
+  const canUseTcpFallback = import.meta.env.MODE === "device" && !forceHttp;
+  const switchTransport = (useHttp: boolean) => {
+    // Keep the current origin, scheme and login; reuse the existing HTTP mode.
+    useSettingsStore.getState().setForceHttp(useHttp);
+    window.location.reload();
+  };
   return (
     <AnimatePresence>
       {show && (
@@ -169,25 +177,31 @@ export function ConnectionFailedOverlay({
                       </ul>
                     </AntdCard>
                   </div>
-                  <div className={`flex  w-full justify-between ${isMobile ? "flex-col h-[100px]" : "flex-row"}`}>
+                  <div className="grid w-full grid-cols-1 gap-2">
                     <AntdButton
                       type="primary"
-                      // icon={<ArrowPathIcon />}
                       icon={<SuaXinSvg />}
                       iconPosition={"end"}
-                      onClick={() => setupPeerConnection()}
-                      className={isMobile ? "w-full !h-[40px]" : "w-[49%]"}
+                      onClick={() => {
+                        if (forceHttp) switchTransport(false);
+                        else void setupPeerConnection();
+                      }}
+                      className="w-full"
                     >
-                      {$at("Try again")}
+                      {forceHttp ? $at("Switch back to WebRTC") : $at("Try again")}
                     </AntdButton>
 
-                    {isMobile && <div className="w-full h-[10px]"></div>}
+                    {canUseTcpFallback && (
+                      <AntdButton className="w-full" onClick={() => switchTransport(true)}>
+                        {$at("Connect over TCP")}
+                      </AntdButton>
+                    )}
+
                     <AntdButton
                       href={"https://wiki.luckfox.com/intro"}
                       icon={<TiaoZhuanSvg />}
                       iconPosition={"end"}
-                      onClick={() => setupPeerConnection()}
-                      className={isMobile ? "w-full !h-[40px]" : "w-[49%]"}
+                      className="w-full"
                     >
                       {$at("Troubleshooting Guide")}
                     </AntdButton>
